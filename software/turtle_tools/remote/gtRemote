@@ -1,0 +1,2292 @@
+--[[     gtRemote      ]]--
+--[[      by Dog       ]]--
+--[[ aka HydrantHunter ]]--
+--[[  with assistance  ]]--
+--[[   from CometWolf  ]]--
+--[[ pastebin XQQsRyLX ]]--
+local gtRver = "2.0.05"
+--[[
+Tested with/requires:
+  - Minecraft 1.6.4+
+  - ComputerCraft 1.63+
+    - 1 Advanced Wireless Pocket Computer
+    - gtHost running on one or more Wireless Turtles (standard or advanced)
+
+Special thanks to: Anavrins       (pbkdf2/sha256 hashing)
+                   SquidDev       (AES encryption/decryption)
+                   Alex Kloss     (base64 encoder/decoder)
+]]--
+--# AUTOMATIC/STATIC CONFIGURATION
+--# Default Settings
+local termX, termY = term.getSize()
+local netSide, runState, tDirection, thisCC = "none", "init", "Forward", tostring(os.getComputerID())
+local kernelState, timerDelay, inputting = true, false, false
+local netReceive, drawCLI, drawHeader, turtleInventory, turtleControlScreen, userInput, pollTimer, tempState
+--# Turtle List
+local allTurtles, filteredTurtles = { }, { }
+local numPages, pageNum = 1, 1
+local fuelFilter, showFuel = false, false
+local gtHost, thisTurtle
+local colorBurst = {
+  G = { order = 1, text = "Green", color = colors.green };
+  S = { order = 2, text = "Sky", color = colors.lightBlue };
+  B = { order = 3, text = "Blue", color = colors.blue };
+  P = { order = 4, text = "Purple", color = colors.purple };
+  R = { order = 5, text = "Red", color = colors.red };
+  O = { order = 6, text = "Orange", color = colors.orange };
+  N = { order = 7, text = "Brown", color = colors.brown };
+  I = { order = 8, text = "Silver", color = colors.lightGray };
+}
+--# Color Definitions
+local white = colors.white
+local black = colors.black
+local silver = colors.lightGray
+local gray = colors.gray
+local brown = colors.brown
+local yellow = colors.yellow
+local orange = colors.orange
+local red = colors.red
+local magenta = colors.magenta
+local purple = colors.purple
+local blue = colors.blue
+local sky = colors.lightBlue
+local cyan = colors.cyan
+local lime = colors.lime
+local green = colors.green
+--# END AUTOMATIC/STATIC CONFIGURATION
+
+-- Lua 5.1+ base64 v3.0 (c) 2009 by Alex Kloss <alexthkloss@web.de>
+-- licensed under the terms of the LGPL2
+-- http://lua-users.org/wiki/BaseSixtyFour
+-- character table string
+local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+-- encoding
+function encode(data)
+  return ((data:gsub('.', function(x) 
+    local r,b='',x:byte()
+    for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
+    return r;
+  end)..'0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
+    if (#x < 6) then return '' end
+    local c=0
+    for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
+    return b:sub(c+1,c+1)
+  end)..({ '', '==', '=' })[#data%3+1])
+end
+-- decoding
+function decode(data)
+  data = string.gsub(data, '[^'..b..'=]', '')
+  return (data:gsub('.', function(x)
+    if (x == '=') then return '' end
+    local r,f='',(b:find(x)-1)
+    for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
+    return r;
+  end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+    if (#x ~= 8) then return '' end
+    local c=0
+    for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
+    return string.char(c)
+  end))
+end
+
+-- AES Lua implementation by SquidDev
+-- https://gist.github.com/SquidDev/86925e07cbabd70773e53d781bd8b2fe
+local encrypt, decrypt
+do
+  local function _W(f) local e=setmetatable({}, {__index = _ENV or getfenv()}) if setfenv then setfenv(f, e) end return f(e) or e end
+  local bit=_W(function(_ENV, ...)
+  --[[
+    This bit API is designed to cope with unsigned integers instead of normal integers
+    To do this we add checks for overflows: (x > 2^31 ? x - 2 ^ 32 : x)
+    These are written in long form because no constant folding.
+  ]]
+  local floor = math.floor
+  local lshift, rshift
+
+  rshift = function(a,disp)
+    return floor(a % 4294967296 / 2^disp)
+  end
+
+  lshift = function(a,disp)
+    return (a * 2^disp) % 4294967296
+  end
+
+  return {
+    -- bit operations
+    bnot = bit32 and bit32.bnot or bit.bnot,
+    band = bit32 and bit32.band or bit.band,
+    bor  = bit32 and bit32.bor or bit.bor,
+    bxor = bit32 and bit32.bxor or bit.bxor,
+    rshift = rshift,
+    lshift = lshift,
+  }
+  end)
+
+  local gf=_W(function(_ENV, ...)
+  -- finite field with base 2 and modulo irreducible polynom x^8+x^4+x^3+x+1 = 0x11d
+  local bxor = bit32 and bit32.bxor or bit.bxor
+  local lshift = bit.lshift
+  -- private data of gf
+  local n = 0x100
+  local ord = 0xff
+  local irrPolynom = 0x11b
+  local exp = {}
+  local log = {}
+  --
+  -- add two polynoms (its simply xor)
+  --
+  local function add(operand1, operand2)
+    return bxor(operand1,operand2)
+  end
+  --
+  -- subtract two polynoms (same as addition)
+  --
+  local function sub(operand1, operand2)
+    return bxor(operand1,operand2)
+  end
+  --
+  -- inverts element
+  -- a^(-1) = g^(order - log(a))
+  --
+  local function invert(operand)
+    -- special case for 1
+    if (operand == 1) then
+      return 1
+    end
+    -- normal invert
+    local exponent = ord - log[operand]
+    return exp[exponent]
+  end
+  --
+  -- multiply two elements using a logarithm table
+  -- a*b = g^(log(a)+log(b))
+  --
+  local function mul(operand1, operand2)
+    if (operand1 == 0 or operand2 == 0) then
+      return 0
+    end
+    local exponent = log[operand1] + log[operand2]
+    if (exponent >= ord) then
+      exponent = exponent - ord
+    end
+    return exp[exponent]
+  end
+  --
+  -- divide two elements
+  -- a/b = g^(log(a)-log(b))
+  --
+  local function div(operand1, operand2)
+    if (operand1 == 0)  then
+      return 0
+    end
+    -- TODO: exception if operand2 == 0
+    local exponent = log[operand1] - log[operand2]
+    if (exponent < 0) then
+      exponent = exponent + ord
+    end
+    return exp[exponent]
+  end
+  --
+  -- print logarithmic table
+  --
+  local function printLog()
+    for i = 1, n do
+      print("log(", i-1, ")=", log[i-1])
+    end
+  end
+  --
+  -- print exponentiation table
+  --
+  local function printExp()
+    for i = 1, n do
+      print("exp(", i-1, ")=", exp[i-1])
+    end
+  end
+  --
+  -- calculate logarithmic and exponentiation table
+  --
+  local function initMulTable()
+    local a = 1
+    for i = 0,ord-1 do
+      exp[i] = a
+      log[a] = i
+      -- multiply with generator x+1 -> left shift + 1
+      a = bxor(lshift(a, 1), a)
+      -- if a gets larger than order, reduce modulo irreducible polynom
+      if a > ord then
+        a = sub(a, irrPolynom)
+      end
+    end
+  end
+
+  initMulTable()
+
+  return {
+    add = add,
+    sub = sub,
+    invert = invert,
+    mul = mul,
+    div = div,
+    printLog = printLog,
+    printExp = printExp,
+  }
+  end)
+
+  util=_W(function(_ENV, ...)
+  -- Cache some bit operators
+  local bxor = bit.bxor
+  local rshift = bit.rshift
+  local band = bit.band
+  local lshift = bit.lshift
+  local sleepCheckIn
+  --
+  -- calculate the parity of one byte
+  --
+  local function byteParity(byte)
+    byte = bxor(byte, rshift(byte, 4))
+    byte = bxor(byte, rshift(byte, 2))
+    byte = bxor(byte, rshift(byte, 1))
+    return band(byte, 1)
+  end
+  --
+  -- get byte at position index
+  --
+  local function getByte(number, index)
+    return index == 0 and band(number,0xff) or band(rshift(number, index*8),0xff)
+  end
+  --
+  -- put number into int at position index
+  --
+  local function putByte(number, index)
+    return index == 0 and band(number,0xff) or lshift(band(number,0xff),index*8)
+  end
+  --
+  -- convert byte array to int array
+  --
+  local function bytesToInts(bytes, start, n)
+    local ints = {}
+    for i = 0, n - 1 do
+      ints[i + 1] =
+          putByte(bytes[start + (i*4)], 3) +
+          putByte(bytes[start + (i*4) + 1], 2) +
+          putByte(bytes[start + (i*4) + 2], 1) +
+          putByte(bytes[start + (i*4) + 3], 0)
+      if n % 10000 == 0 then sleepCheckIn() end
+    end
+    return ints
+  end
+  --
+  -- convert int array to byte array
+  --
+  local function intsToBytes(ints, output, outputOffset, n)
+    n = n or #ints
+    for i = 0, n - 1 do
+      for j = 0,3 do
+        output[outputOffset + i*4 + (3 - j)] = getByte(ints[i + 1], j)
+      end
+      if n % 10000 == 0 then sleepCheckIn() end
+    end
+    return output
+  end
+  --
+  -- convert bytes to hexString
+  --
+  local function bytesToHex(bytes)
+    local hexBytes = ""
+    for i,byte in ipairs(bytes) do
+      hexBytes = hexBytes .. string.format("%02x ", byte)
+    end
+    return hexBytes
+  end
+
+  local function hexToBytes(bytes)
+    local out = {}
+    for i = 1, #bytes, 2 do
+      out[#out + 1] = tonumber(bytes:sub(i, i + 1), 16)
+    end
+    return out
+  end
+  --
+  -- convert data to hex string
+  --
+  local function toHexString(data)
+    local type = type(data)
+    if (type == "number") then
+      return string.format("%08x",data)
+    elseif (type == "table") then
+      return bytesToHex(data)
+    elseif (type == "string") then
+      local bytes = {string.byte(data, 1, #data)}
+      return bytesToHex(bytes)
+    else
+      return data
+    end
+  end
+
+  local function padByteString(data)
+    local dataLength = #data
+    local random1 = math.random(0,255)
+    local random2 = math.random(0,255)
+    local prefix = string.char(random1,
+      random2,
+      random1,
+      random2,
+      getByte(dataLength, 3),
+      getByte(dataLength, 2),
+      getByte(dataLength, 1),
+      getByte(dataLength, 0)
+    )
+    data = prefix .. data
+    local padding, paddingLength = "", math.ceil(#data/16)*16 - #data
+    for i=1,paddingLength do
+      padding = padding .. string.char(math.random(0,255))
+    end
+    return data .. padding
+  end
+
+  local function properlyDecrypted(data)
+    local random = {string.byte(data,1,4)}
+
+    if (random[1] == random[3] and random[2] == random[4]) then
+      return true
+    end
+
+    return false
+  end
+
+  local function unpadByteString(data)
+    if (not properlyDecrypted(data)) then
+      return nil
+    end
+    local dataLength = putByte(string.byte(data,5), 3)
+             + putByte(string.byte(data,6), 2)
+             + putByte(string.byte(data,7), 1)
+             + putByte(string.byte(data,8), 0)
+    return string.sub(data,9,8+dataLength)
+  end
+
+  local function xorIV(data, iv)
+    for i = 1,16 do
+      data[i] = bxor(data[i], iv[i])
+    end
+  end
+
+  local function increment(data)
+    local i = 16
+    while true do
+      local value = data[i] + 1
+      if value >= 256 then
+        data[i] = value - 256
+        i = (i - 2) % 16 + 1
+      else
+        data[i] = value
+        break
+      end
+    end
+  end
+
+  -- Called every encryption cycle
+  local push, pull, time = os.queueEvent, coroutine.yield, os.time
+  local oldTime = time()
+  local function sleepCheckIn()
+    local newTime = time()
+    if newTime - oldTime >= 0.03 then -- (0.020 * 1.5)
+      oldTime = newTime
+      push("sleep")
+      pull("sleep")
+    end
+  end
+
+  local function getRandomData(bytes)
+    local char, random, sleep, insert = string.char, math.random, sleepCheckIn, table.insert
+    local result = {}
+    for i=1,bytes do
+      insert(result, random(0,255))
+      if i % 10240 == 0 then sleep() end
+    end
+    return result
+  end
+
+  local function getRandomString(bytes)
+    local char, random, sleep, insert = string.char, math.random, sleepCheckIn, table.insert
+    local result = {}
+    for i=1,bytes do
+      insert(result, char(random(0,255)))
+      if i % 10240 == 0 then sleep() end
+    end
+    return table.concat(result)
+  end
+
+  return {
+    byteParity = byteParity,
+    getByte = getByte,
+    putByte = putByte,
+    bytesToInts = bytesToInts,
+    intsToBytes = intsToBytes,
+    bytesToHex = bytesToHex,
+    hexToBytes = hexToBytes,
+    toHexString = toHexString,
+    padByteString = padByteString,
+    properlyDecrypted = properlyDecrypted,
+    unpadByteString = unpadByteString,
+    xorIV = xorIV,
+    increment = increment,
+    sleepCheckIn = sleepCheckIn,
+    getRandomData = getRandomData,
+    getRandomString = getRandomString,
+  }
+  end)
+
+  aes=_W(function(_ENV, ...)
+  -- Implementation of AES with nearly pure lua
+  -- AES with lua is slow, really slow :-)
+  local putByte = util.putByte
+  local getByte = util.getByte
+  -- some constants
+  local ROUNDS = 'rounds'
+  local KEY_TYPE = "type"
+  local ENCRYPTION_KEY=1
+  local DECRYPTION_KEY=2
+  -- aes SBOX
+  local SBox = {}
+  local iSBox = {}
+  -- aes tables
+  local table0 = {}
+  local table1 = {}
+  local table2 = {}
+  local table3 = {}
+  local tableInv0 = {}
+  local tableInv1 = {}
+  local tableInv2 = {}
+  local tableInv3 = {}
+  -- round constants
+  local rCon = {
+    0x01000000,
+    0x02000000,
+    0x04000000,
+    0x08000000,
+    0x10000000,
+    0x20000000,
+    0x40000000,
+    0x80000000,
+    0x1b000000,
+    0x36000000,
+    0x6c000000,
+    0xd8000000,
+    0xab000000,
+    0x4d000000,
+    0x9a000000,
+    0x2f000000,
+  }
+  --
+  -- affine transformation for calculating the S-Box of AES
+  --
+  local function affinMap(byte)
+    mask = 0xf8
+    result = 0
+    for i = 1,8 do
+      result = bit.lshift(result,1)
+      parity = util.byteParity(bit.band(byte,mask))
+      result = result + parity
+      -- simulate roll
+      lastbit = bit.band(mask, 1)
+      mask = bit.band(bit.rshift(mask, 1),0xff)
+      mask = lastbit ~= 0 and bit.bor(mask, 0x80) or bit.band(mask, 0x7f) 
+    end
+    return bit.bxor(result, 0x63)
+  end
+  --
+  -- calculate S-Box and inverse S-Box of AES
+  -- apply affine transformation to inverse in finite field 2^8
+  --
+  local function calcSBox()
+    for i = 0, 255 do
+      inverse = i ~= 0 and gf.invert(i) or i
+      mapped = affinMap(inverse)
+      SBox[i] = mapped
+      iSBox[mapped] = i
+    end
+  end
+  --
+  -- Calculate round tables
+  -- round tables are used to calculate shiftRow, MixColumn and SubBytes
+  -- with 4 table lookups and 4 xor operations.
+  --
+  local function calcRoundTables()
+    for x = 0,255 do
+      byte = SBox[x]
+      table0[x] = putByte(gf.mul(0x03, byte), 0)
+                + putByte(             byte , 1)
+                + putByte(             byte , 2)
+                + putByte(gf.mul(0x02, byte), 3)
+      table1[x] = putByte(             byte , 0)
+                + putByte(             byte , 1)
+                + putByte(gf.mul(0x02, byte), 2)
+                + putByte(gf.mul(0x03, byte), 3)
+      table2[x] = putByte(             byte , 0)
+                + putByte(gf.mul(0x02, byte), 1)
+                + putByte(gf.mul(0x03, byte), 2)
+                + putByte(             byte , 3)
+      table3[x] = putByte(gf.mul(0x02, byte), 0)
+                + putByte(gf.mul(0x03, byte), 1)
+                + putByte(             byte , 2)
+                + putByte(             byte , 3)
+    end
+  end
+  --
+  -- Calculate inverse round tables
+  -- does the inverse of the normal roundtables for the equivalent
+  -- decryption algorithm.
+  --
+  local function calcInvRoundTables()
+    for x = 0,255 do
+      byte = iSBox[x]
+      tableInv0[x] = putByte(gf.mul(0x0b, byte), 0)
+                 + putByte(gf.mul(0x0d, byte), 1)
+                 + putByte(gf.mul(0x09, byte), 2)
+                 + putByte(gf.mul(0x0e, byte), 3)
+      tableInv1[x] = putByte(gf.mul(0x0d, byte), 0)
+                 + putByte(gf.mul(0x09, byte), 1)
+                 + putByte(gf.mul(0x0e, byte), 2)
+                 + putByte(gf.mul(0x0b, byte), 3)
+      tableInv2[x] = putByte(gf.mul(0x09, byte), 0)
+                 + putByte(gf.mul(0x0e, byte), 1)
+                 + putByte(gf.mul(0x0b, byte), 2)
+                 + putByte(gf.mul(0x0d, byte), 3)
+      tableInv3[x] = putByte(gf.mul(0x0e, byte), 0)
+                 + putByte(gf.mul(0x0b, byte), 1)
+                 + putByte(gf.mul(0x0d, byte), 2)
+                 + putByte(gf.mul(0x09, byte), 3)
+    end
+  end
+  --
+  -- rotate word: 0xaabbccdd gets 0xbbccddaa
+  -- used for key schedule
+  --
+  local function rotWord(word)
+    local tmp = bit.band(word,0xff000000)
+    return (bit.lshift(word,8) + bit.rshift(tmp,24))
+  end
+  --
+  -- replace all bytes in a word with the SBox.
+  -- used for key schedule
+  --
+  local function subWord(word)
+    return putByte(SBox[getByte(word,0)],0)
+      + putByte(SBox[getByte(word,1)],1)
+      + putByte(SBox[getByte(word,2)],2)
+      + putByte(SBox[getByte(word,3)],3)
+  end
+  --
+  -- generate key schedule for aes encryption
+  --
+  -- returns table with all round keys and
+  -- the necessary number of rounds saved in [ROUNDS]
+  --
+  local function expandEncryptionKey(key)
+    local keySchedule = {}
+    local keyWords = math.floor(#key / 4)
+    if ((keyWords ~= 4 and keyWords ~= 6 and keyWords ~= 8) or (keyWords * 4 ~= #key)) then
+      error("Invalid key size: " .. tostring(keyWords))
+      return nil
+    end
+    keySchedule[ROUNDS] = keyWords + 6
+    keySchedule[KEY_TYPE] = ENCRYPTION_KEY
+    for i = 0,keyWords - 1 do
+      keySchedule[i] = putByte(key[i*4+1], 3)
+               + putByte(key[i*4+2], 2)
+               + putByte(key[i*4+3], 1)
+               + putByte(key[i*4+4], 0)
+    end
+    for i = keyWords, (keySchedule[ROUNDS] + 1)*4 - 1 do
+      local tmp = keySchedule[i-1]
+      if ( i % keyWords == 0) then
+        tmp = rotWord(tmp)
+        tmp = subWord(tmp)
+        local index = math.floor(i/keyWords)
+        tmp = bit.bxor(tmp,rCon[index])
+      elseif (keyWords > 6 and i % keyWords == 4) then
+        tmp = subWord(tmp)
+      end
+      keySchedule[i] = bit.bxor(keySchedule[(i-keyWords)],tmp)
+    end
+    return keySchedule
+  end
+  --
+  -- Inverse mix column
+  -- used for key schedule of decryption key
+  --
+  local function invMixColumnOld(word)
+    local b0 = getByte(word,3)
+    local b1 = getByte(word,2)
+    local b2 = getByte(word,1)
+    local b3 = getByte(word,0)
+    return putByte(gf.add(gf.add(gf.add(gf.mul(0x0b, b1),
+                         gf.mul(0x0d, b2)),
+                         gf.mul(0x09, b3)),
+                         gf.mul(0x0e, b0)),3)
+       + putByte(gf.add(gf.add(gf.add(gf.mul(0x0b, b2),
+                         gf.mul(0x0d, b3)),
+                         gf.mul(0x09, b0)),
+                         gf.mul(0x0e, b1)),2)
+       + putByte(gf.add(gf.add(gf.add(gf.mul(0x0b, b3),
+                         gf.mul(0x0d, b0)),
+                         gf.mul(0x09, b1)),
+                         gf.mul(0x0e, b2)),1)
+       + putByte(gf.add(gf.add(gf.add(gf.mul(0x0b, b0),
+                         gf.mul(0x0d, b1)),
+                         gf.mul(0x09, b2)),
+                         gf.mul(0x0e, b3)),0)
+  end
+  --
+  -- Optimized inverse mix column
+  -- look at http://fp.gladman.plus.com/cryptography_technology/rijndael/aes.spec.311.pdf
+  -- TODO: make it work
+  --
+  local function invMixColumn(word)
+    local b0 = getByte(word,3)
+    local b1 = getByte(word,2)
+    local b2 = getByte(word,1)
+    local b3 = getByte(word,0)
+    local t = bit.bxor(b3,b2)
+    local u = bit.bxor(b1,b0)
+    local v = bit.bxor(t,u)
+    v = bit.bxor(v,gf.mul(0x08,v))
+    w = bit.bxor(v,gf.mul(0x04, bit.bxor(b2,b0)))
+    v = bit.bxor(v,gf.mul(0x04, bit.bxor(b3,b1)))
+    return putByte( bit.bxor(bit.bxor(b3,v), gf.mul(0x02, bit.bxor(b0,b3))), 0)
+       + putByte( bit.bxor(bit.bxor(b2,w), gf.mul(0x02, t              )), 1)
+       + putByte( bit.bxor(bit.bxor(b1,v), gf.mul(0x02, bit.bxor(b0,b3))), 2)
+       + putByte( bit.bxor(bit.bxor(b0,w), gf.mul(0x02, u              )), 3)
+  end
+  --
+  -- generate key schedule for aes decryption
+  --
+  -- uses key schedule for aes encryption and transforms each
+  -- key by inverse mix column.
+  --
+  local function expandDecryptionKey(key)
+    local keySchedule = expandEncryptionKey(key)
+    if (keySchedule == nil) then
+      return nil
+    end
+    keySchedule[KEY_TYPE] = DECRYPTION_KEY
+    for i = 4, (keySchedule[ROUNDS] + 1)*4 - 5 do
+      keySchedule[i] = invMixColumnOld(keySchedule[i])
+    end
+    return keySchedule
+  end
+  --
+  -- xor round key to state
+  --
+  local function addRoundKey(state, key, round)
+    for i = 0, 3 do
+      state[i + 1] = bit.bxor(state[i + 1], key[round*4+i])
+    end
+  end
+  --
+  -- do encryption round (ShiftRow, SubBytes, MixColumn together)
+  --
+  local function doRound(origState, dstState)
+    dstState[1] =  bit.bxor(bit.bxor(bit.bxor(
+          table0[getByte(origState[1],3)],
+          table1[getByte(origState[2],2)]),
+          table2[getByte(origState[3],1)]),
+          table3[getByte(origState[4],0)])
+    dstState[2] =  bit.bxor(bit.bxor(bit.bxor(
+          table0[getByte(origState[2],3)],
+          table1[getByte(origState[3],2)]),
+          table2[getByte(origState[4],1)]),
+          table3[getByte(origState[1],0)])
+    dstState[3] =  bit.bxor(bit.bxor(bit.bxor(
+          table0[getByte(origState[3],3)],
+          table1[getByte(origState[4],2)]),
+          table2[getByte(origState[1],1)]),
+          table3[getByte(origState[2],0)])
+    dstState[4] =  bit.bxor(bit.bxor(bit.bxor(
+          table0[getByte(origState[4],3)],
+          table1[getByte(origState[1],2)]),
+          table2[getByte(origState[2],1)]),
+          table3[getByte(origState[3],0)])
+  end
+  --
+  -- do last encryption round (ShiftRow and SubBytes)
+  --
+  local function doLastRound(origState, dstState)
+    dstState[1] = putByte(SBox[getByte(origState[1],3)], 3)
+          + putByte(SBox[getByte(origState[2],2)], 2)
+          + putByte(SBox[getByte(origState[3],1)], 1)
+          + putByte(SBox[getByte(origState[4],0)], 0)
+    dstState[2] = putByte(SBox[getByte(origState[2],3)], 3)
+          + putByte(SBox[getByte(origState[3],2)], 2)
+          + putByte(SBox[getByte(origState[4],1)], 1)
+          + putByte(SBox[getByte(origState[1],0)], 0)
+    dstState[3] = putByte(SBox[getByte(origState[3],3)], 3)
+          + putByte(SBox[getByte(origState[4],2)], 2)
+          + putByte(SBox[getByte(origState[1],1)], 1)
+          + putByte(SBox[getByte(origState[2],0)], 0)
+    dstState[4] = putByte(SBox[getByte(origState[4],3)], 3)
+          + putByte(SBox[getByte(origState[1],2)], 2)
+          + putByte(SBox[getByte(origState[2],1)], 1)
+          + putByte(SBox[getByte(origState[3],0)], 0)
+  end
+  --
+  -- do decryption round
+  --
+  local function doInvRound(origState, dstState)
+    dstState[1] =  bit.bxor(bit.bxor(bit.bxor(
+          tableInv0[getByte(origState[1],3)],
+          tableInv1[getByte(origState[4],2)]),
+          tableInv2[getByte(origState[3],1)]),
+          tableInv3[getByte(origState[2],0)])
+    dstState[2] =  bit.bxor(bit.bxor(bit.bxor(
+          tableInv0[getByte(origState[2],3)],
+          tableInv1[getByte(origState[1],2)]),
+          tableInv2[getByte(origState[4],1)]),
+          tableInv3[getByte(origState[3],0)])
+    dstState[3] =  bit.bxor(bit.bxor(bit.bxor(
+          tableInv0[getByte(origState[3],3)],
+          tableInv1[getByte(origState[2],2)]),
+          tableInv2[getByte(origState[1],1)]),
+          tableInv3[getByte(origState[4],0)])
+    dstState[4] =  bit.bxor(bit.bxor(bit.bxor(
+          tableInv0[getByte(origState[4],3)],
+          tableInv1[getByte(origState[3],2)]),
+          tableInv2[getByte(origState[2],1)]),
+          tableInv3[getByte(origState[1],0)])
+  end
+  --
+  -- do last decryption round
+  --
+  local function doInvLastRound(origState, dstState)
+    dstState[1] = putByte(iSBox[getByte(origState[1],3)], 3)
+          + putByte(iSBox[getByte(origState[4],2)], 2)
+          + putByte(iSBox[getByte(origState[3],1)], 1)
+          + putByte(iSBox[getByte(origState[2],0)], 0)
+    dstState[2] = putByte(iSBox[getByte(origState[2],3)], 3)
+          + putByte(iSBox[getByte(origState[1],2)], 2)
+          + putByte(iSBox[getByte(origState[4],1)], 1)
+          + putByte(iSBox[getByte(origState[3],0)], 0)
+    dstState[3] = putByte(iSBox[getByte(origState[3],3)], 3)
+          + putByte(iSBox[getByte(origState[2],2)], 2)
+          + putByte(iSBox[getByte(origState[1],1)], 1)
+          + putByte(iSBox[getByte(origState[4],0)], 0)
+    dstState[4] = putByte(iSBox[getByte(origState[4],3)], 3)
+          + putByte(iSBox[getByte(origState[3],2)], 2)
+          + putByte(iSBox[getByte(origState[2],1)], 1)
+          + putByte(iSBox[getByte(origState[1],0)], 0)
+  end
+  --
+  -- encrypts 16 Bytes
+  -- key           encryption key schedule
+  -- input         array with input data
+  -- inputOffset   start index for input
+  -- output        array for encrypted data
+  -- outputOffset  start index for output
+  --
+  local function encrypt(key, input, inputOffset, output, outputOffset)
+    --default parameters
+    inputOffset = inputOffset or 1
+    output = output or {}
+    outputOffset = outputOffset or 1
+    local state = {}
+    local tmpState = {}
+    if (key[KEY_TYPE] ~= ENCRYPTION_KEY) then
+      error("No encryption key: " .. tostring(key[KEY_TYPE]) .. ", expected " .. ENCRYPTION_KEY)
+      return
+    end
+    state = util.bytesToInts(input, inputOffset, 4)
+    addRoundKey(state, key, 0)
+    local round = 1
+    while (round < key[ROUNDS] - 1) do
+      -- do a double round to save temporary assignments
+      doRound(state, tmpState)
+      addRoundKey(tmpState, key, round)
+      round = round + 1
+      doRound(tmpState, state)
+      addRoundKey(state, key, round)
+      round = round + 1
+    end
+    doRound(state, tmpState)
+    addRoundKey(tmpState, key, round)
+    round = round +1
+    doLastRound(tmpState, state)
+    addRoundKey(state, key, round)
+    util.sleepCheckIn()
+    return util.intsToBytes(state, output, outputOffset)
+  end
+  --
+  -- decrypt 16 bytes
+  -- key           decryption key schedule
+  -- input         array with input data
+  -- inputOffset   start index for input
+  -- output        array for decrypted data
+  -- outputOffset  start index for output
+  ---
+  local function decrypt(key, input, inputOffset, output, outputOffset)
+    -- default arguments
+    inputOffset = inputOffset or 1
+    output = output or {}
+    outputOffset = outputOffset or 1
+    local state = {}
+    local tmpState = {}
+    if (key[KEY_TYPE] ~= DECRYPTION_KEY) then
+      error("No decryption key: " .. tostring(key[KEY_TYPE]))
+      return
+    end
+    state = util.bytesToInts(input, inputOffset, 4)
+    addRoundKey(state, key, key[ROUNDS])
+    local round = key[ROUNDS] - 1
+    while (round > 2) do
+      -- do a double round to save temporary assignments
+      doInvRound(state, tmpState)
+      addRoundKey(tmpState, key, round)
+      round = round - 1
+      doInvRound(tmpState, state)
+      addRoundKey(state, key, round)
+      round = round - 1
+    end
+    doInvRound(state, tmpState)
+    addRoundKey(tmpState, key, round)
+    round = round - 1
+    doInvLastRound(tmpState, state)
+    addRoundKey(state, key, round)
+    util.sleepCheckIn()
+    return util.intsToBytes(state, output, outputOffset)
+  end
+
+  -- calculate all tables when loading this file
+  calcSBox()
+  calcRoundTables()
+  calcInvRoundTables()
+
+  return {
+    ROUNDS = ROUNDS,
+    KEY_TYPE = KEY_TYPE,
+    ENCRYPTION_KEY = ENCRYPTION_KEY,
+    DECRYPTION_KEY = DECRYPTION_KEY,
+    expandEncryptionKey = expandEncryptionKey,
+    expandDecryptionKey = expandDecryptionKey,
+    encrypt = encrypt,
+    decrypt = decrypt,
+  }
+  end)
+
+  local buffer=_W(function(_ENV, ...)
+  local function new ()
+    return {}
+  end
+
+  local function addString (stack, s)
+    table.insert(stack, s)
+  end
+
+  local function toString (stack)
+    return table.concat(stack)
+  end
+
+  return {
+    new = new,
+    addString = addString,
+    toString = toString,
+  }
+  end)
+
+  ciphermode=_W(function(_ENV, ...)
+  local public = {}
+  --
+  -- Encrypt strings
+  -- key - byte array with key
+  -- string - string to encrypt
+  -- modefunction - function for cipher mode to use
+  --
+  local random, unpack = math.random, unpack or table.unpack
+  function public.encryptString(key, data, modeFunction, iv)
+    if iv then
+      local ivCopy = {}
+      for i = 1, 16 do ivCopy[i] = iv[i] end
+      iv = ivCopy
+    else
+      iv = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
+    end
+    local keySched = aes.expandEncryptionKey(key)
+    local encryptedData = buffer.new()
+    for i = 1, #data/16 do
+      local offset = (i-1)*16 + 1
+      local byteData = {string.byte(data,offset,offset +15)}
+      iv = modeFunction(keySched, byteData, iv)
+      buffer.addString(encryptedData, string.char(unpack(byteData)))
+    end
+    return buffer.toString(encryptedData)
+  end
+  --
+  -- the following 4 functions can be used as
+  -- modefunction for encryptString
+  --
+  -- Electronic code book mode encrypt function
+  function public.encryptECB(keySched, byteData, iv)
+    aes.encrypt(keySched, byteData, 1, byteData, 1)
+  end
+
+  -- Cipher block chaining mode encrypt function
+  function public.encryptCBC(keySched, byteData, iv)
+    util.xorIV(byteData, iv)
+    aes.encrypt(keySched, byteData, 1, byteData, 1)
+    return byteData
+  end
+
+  -- Output feedback mode encrypt function
+  function public.encryptOFB(keySched, byteData, iv)
+    aes.encrypt(keySched, iv, 1, iv, 1)
+    util.xorIV(byteData, iv)
+    return iv
+  end
+
+  -- Cipher feedback mode encrypt function
+  function public.encryptCFB(keySched, byteData, iv)
+    aes.encrypt(keySched, iv, 1, iv, 1)
+    util.xorIV(byteData, iv)
+    return byteData
+  end
+
+  function public.encryptCTR(keySched, byteData, iv)
+    local nextIV = {}
+    for j = 1, 16 do nextIV[j] = iv[j] end
+    aes.encrypt(keySched, iv, 1, iv, 1)
+    util.xorIV(byteData, iv)
+    util.increment(nextIV)
+    return nextIV
+  end
+  --
+  -- Decrypt strings
+  -- key - byte array with key
+  -- string - string to decrypt
+  -- modefunction - function for cipher mode to use
+  --
+  function public.decryptString(key, data, modeFunction, iv)
+    if iv then
+      local ivCopy = {}
+      for i = 1, 16 do ivCopy[i] = iv[i] end
+      iv = ivCopy
+    else
+      iv = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
+    end
+    local keySched
+    if modeFunction == public.decryptOFB or modeFunction == public.decryptCFB or modeFunction == public.decryptCTR then
+      keySched = aes.expandEncryptionKey(key)
+    else
+      keySched = aes.expandDecryptionKey(key)
+    end
+    local decryptedData = buffer.new()
+    for i = 1, #data/16 do
+      local offset = (i-1)*16 + 1
+      local byteData = {string.byte(data,offset,offset +15)}
+      iv = modeFunction(keySched, byteData, iv)
+      buffer.addString(decryptedData, string.char(unpack(byteData)))
+    end
+    return buffer.toString(decryptedData)
+  end
+  --
+  -- the following 4 functions can be used as
+  -- modefunction for decryptString
+  --
+  -- Electronic code book mode decrypt function
+  function public.decryptECB(keySched, byteData, iv)
+    aes.decrypt(keySched, byteData, 1, byteData, 1)
+    return iv
+  end
+
+  -- Cipher block chaining mode decrypt function
+  function public.decryptCBC(keySched, byteData, iv)
+    local nextIV = {}
+    for j = 1, 16 do nextIV[j] = byteData[j] end
+    aes.decrypt(keySched, byteData, 1, byteData, 1)
+    util.xorIV(byteData, iv)
+    return nextIV
+  end
+
+  -- Output feedback mode decrypt function
+  function public.decryptOFB(keySched, byteData, iv)
+    aes.encrypt(keySched, iv, 1, iv, 1)
+    util.xorIV(byteData, iv)
+    return iv
+  end
+
+  -- Cipher feedback mode decrypt function
+  function public.decryptCFB(keySched, byteData, iv)
+    local nextIV = {}
+    for j = 1, 16 do nextIV[j] = byteData[j] end
+    aes.encrypt(keySched, iv, 1, iv, 1)
+    util.xorIV(byteData, iv)
+    return nextIV
+  end
+
+  public.decryptCTR = public.encryptCTR
+  return public
+  end)
+
+  -- Simple API for encrypting strings.
+  --
+  AES128 = 16
+  AES192 = 24
+  AES256 = 32
+  ECBMODE = 1
+  CBCMODE = 2
+  OFBMODE = 3
+  CFBMODE = 4
+  CTRMODE = 4
+
+  local function pwToKey(password, keyLength, iv)
+    local padLength = keyLength
+    if (keyLength == AES192) then
+      padLength = 32
+    end
+    if (padLength > #password) then
+      local postfix = ""
+      for i = 1,padLength - #password do
+        postfix = postfix .. string.char(0)
+      end
+      password = password .. postfix
+    else
+      password = string.sub(password, 1, padLength)
+    end
+    local pwBytes = {string.byte(password,1,#password)}
+    password = ciphermode.encryptString(pwBytes, password, ciphermode.encryptCBC, iv)
+    password = string.sub(password, 1, keyLength)
+    return {string.byte(password,1,#password)}
+  end
+  --
+  -- Encrypts string data with password password.
+  -- password  - the encryption key is generated from this string
+  -- data      - string to encrypt (must not be too large)
+  -- keyLength - length of aes key: 128(default), 192 or 256 Bit
+  -- mode      - mode of encryption: ecb, cbc(default), ofb, cfb
+  --
+  -- mode and keyLength must be the same for encryption and decryption.
+  --
+  function encrypt(password, data, keyLength, mode, iv)
+    assert(password ~= nil, "Empty password.")
+    assert(data ~= nil, "Empty data.")
+    local mode = mode or CBCMODE
+    local keyLength = keyLength or AES128
+    local key = pwToKey(password, keyLength, iv)
+    local paddedData = util.padByteString(data)
+    if mode == ECBMODE then
+      return ciphermode.encryptString(key, paddedData, ciphermode.encryptECB, iv)
+    elseif mode == CBCMODE then
+      return ciphermode.encryptString(key, paddedData, ciphermode.encryptCBC, iv)
+    elseif mode == OFBMODE then
+      return ciphermode.encryptString(key, paddedData, ciphermode.encryptOFB, iv)
+    elseif mode == CFBMODE then
+      return ciphermode.encryptString(key, paddedData, ciphermode.encryptCFB, iv)
+    elseif mode == CTRMODE then
+      return ciphermode.encryptString(key, paddedData, ciphermode.encryptCTR, iv)
+    else
+      error("Unknown mode", 2)
+    end
+  end
+  --
+  -- Decrypts string data with password password.
+  -- password  - the decryption key is generated from this string
+  -- data      - string to encrypt
+  -- keyLength - length of aes key: 128(default), 192 or 256 Bit
+  -- mode      - mode of decryption: ecb, cbc(default), ofb, cfb
+  --
+  -- mode and keyLength must be the same for encryption and decryption.
+  --
+  function decrypt(password, data, keyLength, mode, iv)
+    local mode = mode or CBCMODE
+    local keyLength = keyLength or AES128
+    local key = pwToKey(password, keyLength, iv)
+    local plain
+    if mode == ECBMODE then
+      plain = ciphermode.decryptString(key, data, ciphermode.decryptECB, iv)
+    elseif mode == CBCMODE then
+      plain = ciphermode.decryptString(key, data, ciphermode.decryptCBC, iv)
+    elseif mode == OFBMODE then
+      plain = ciphermode.decryptString(key, data, ciphermode.decryptOFB, iv)
+    elseif mode == CFBMODE then
+      plain = ciphermode.decryptString(key, data, ciphermode.decryptCFB, iv)
+    elseif mode == CTRMODE then
+      plain = ciphermode.decryptString(key, data, ciphermode.decryptCTR, iv)
+    else
+      error("Unknown mode", 2)
+    end
+    result = util.unpadByteString(plain)
+    if (result == nil) then
+      return nil
+    end
+    return result
+  end
+end
+
+-- SHA-256, HMAC and PBKDF2 functions in ComputerCraft
+-- By Anavrins
+-- For help and details, you can PM me on the CC forums
+-- http://www.computercraft.info/forums2/index.php?/user/12870-anavrins
+-- Pastebin: http://pastebin.com/6UV4qfNF
+-- You may use this code in your projects without asking me, as long as credit is given and this header is kept intact
+local digest, hmac, pbkdf2
+do
+  local mod32 = 2^32
+  local sha_hashlen = 32
+  local sha_blocksize = 64
+  local band    = bit32 and bit32.band or bit.band
+  local bnot    = bit32 and bit32.bnot or bit.bnot
+  local bxor    = bit32 and bit32.bxor or bit.bxor
+  local blshift = bit32 and bit32.lshift or bit.blshift
+  local upack   = unpack
+
+  local function rrotate(n, b)
+    local s = n/(2^b)
+    local f = s%1
+    return (s-f) + f*mod32
+  end
+
+  local function brshift(int, by) -- Thanks bit32 for bad rshift
+    local s = int / (2^by)
+    return s - s%1
+  end
+
+  local H = {
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  }
+
+  local K = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  }
+
+  local function counter(incr)
+    local t1, t2 = 0, 0
+    if 0xFFFFFFFF - t1 < incr then
+      t2 = t2 + 1
+      t1 = incr - (0xFFFFFFFF - t1) - 1		
+    else t1 = t1 + incr
+    end
+    return t2, t1
+  end
+
+  local function BE_toInt(bs, i)
+    return blshift((bs[i] or 0), 24) + blshift((bs[i+1] or 0), 16) + blshift((bs[i+2] or 0), 8) + (bs[i+3] or 0)
+  end
+
+  local function preprocess(data)
+    local len = #data
+    local proc = {}
+    data[#data+1] = 0x80
+    while #data%64~=56 do data[#data+1] = 0 end
+    local blocks = math.ceil(#data/64)
+    for i = 1, blocks do
+      proc[i] = {}
+      for j = 1, 16 do
+        proc[i][j] = BE_toInt(data, 1+((i-1)*64)+((j-1)*4))
+      end
+    end
+    proc[blocks][15], proc[blocks][16] = counter(len*8)
+    return proc
+  end
+
+  local function digestblock(w, C)
+    for j = 17, 64 do
+      local v = w[j-15]
+      local s0 = bxor(bxor(rrotate(w[j-15], 7), rrotate(w[j-15], 18)), brshift(w[j-15], 3))
+      local s1 = bxor(bxor(rrotate(w[j-2], 17), rrotate(w[j-2], 19)), brshift(w[j-2], 10))
+      w[j] = (w[j-16] + s0 + w[j-7] + s1)%mod32
+    end
+    local a, b, c, d, e, f, g, h = upack(C)
+    for j = 1, 64 do
+      local S1 = bxor(bxor(rrotate(e, 6), rrotate(e, 11)), rrotate(e, 25))
+      local ch = bxor(band(e, f), band(bnot(e), g))
+      local temp1 = (h + S1 + ch + K[j] + w[j])%mod32
+      local S0 = bxor(bxor(rrotate(a, 2), rrotate(a, 13)), rrotate(a, 22))
+      local maj = bxor(bxor(band(a, b), band(a, c)), band(b, c))
+      local temp2 = (S0 + maj)%mod32
+      h, g, f, e, d, c, b, a = g, f, e, (d+temp1)%mod32, c, b, a, (temp1+temp2)%mod32
+    end
+    C[1] = (C[1] + a)%mod32
+    C[2] = (C[2] + b)%mod32
+    C[3] = (C[3] + c)%mod32
+    C[4] = (C[4] + d)%mod32
+    C[5] = (C[5] + e)%mod32
+    C[6] = (C[6] + f)%mod32
+    C[7] = (C[7] + g)%mod32
+    C[8] = (C[8] + h)%mod32
+    return C
+  end
+
+  local mt = {
+    __tostring = function(a) return string.char(unpack(a)) end,
+    __index = {
+      toHex = function(self, s) return ("%02x"):rep(#self):format(unpack(self)) end,
+      isEqual = function(self, t)
+        if type(t) ~= "table" then return false end
+        if #self ~= #t then return false end
+        local ret = 0
+        for i = 1, #self do
+          ret = bit32.bor(ret, bxor(self[i], t[i]))
+        end
+        return ret == 0
+      end
+    }
+  }
+
+  local function toBytes(t, n)
+    local b = {}
+    for i = 1, n do
+      b[(i-1)*4+1] = band(brshift(band(t[i], 0xFF000000), 24), 0xFF)
+      b[(i-1)*4+2] = band(brshift(band(t[i], 0xFF0000), 16), 0xFF)
+      b[(i-1)*4+3] = band(brshift(band(t[i], 0xFF00), 8), 0xFF)
+      b[(i-1)*4+4] = band(t[i], 0xFF)
+    end
+    return setmetatable(b, mt)
+  end
+
+  digest = function(data)
+    data = data or ""
+    data = type(data) == "string" and {data:byte(1,-1)} or data
+    data = preprocess(data)
+    local C = {upack(H)}
+    for i = 1, #data do C = digestblock(data[i], C) end
+    return toBytes(C, 8)
+  end
+
+  hmac = function(data, key)
+    local data = type(data) == "table" and {upack(data)} or {tostring(data):byte(1,-1)}
+    local key = type(key) == "table" and {upack(key)} or {tostring(key):byte(1,-1)}
+    local blocksize = sha_blocksize
+    key = #key > blocksize and digest(key) or key
+    local ipad = {}
+    local opad = {}
+    local padded_key = {}
+    for i = 1, blocksize do
+      ipad[i] = bxor(0x36, key[i] or 0)
+      opad[i] = bxor(0x5C, key[i] or 0)
+    end
+    for i = 1, #data do
+      ipad[blocksize+i] = data[i]
+    end
+    ipad = digest(ipad)
+    for i = 1, blocksize do
+      padded_key[i] = opad[i]
+      padded_key[blocksize+i] = ipad[i]
+    end
+    return digest(padded_key)
+  end
+
+  pbkdf2 = function(pass, salt, iter, dklen)
+    local out = {}
+    local hashlen = sha_hashlen
+    local block = 1
+    dklen = dklen or 32
+    while dklen > 0 do
+      local ikey = {}
+      local isalt = type(salt) == "table" and {upack(salt)} or {tostring(salt):byte(1,-1)}
+      local clen = dklen > hashlen and hashlen or dklen
+      local iCount = #isalt
+      isalt[iCount+1] = band(brshift(band(block, 0xFF000000), 24), 0xFF)
+      isalt[iCount+2] = band(brshift(band(block, 0xFF0000), 16), 0xFF)
+      isalt[iCount+3] = band(brshift(band(block, 0xFF00), 8), 0xFF)
+      isalt[iCount+4] = band(block, 0xFF)
+      for j = 1, iter do
+        isalt = hmac(isalt, pass)
+        for k = 1, clen do ikey[k] = bxor(isalt[k], ikey[k] or 0) end
+        if j % 200 == 0 then os.queueEvent("PBKDF2", j) coroutine.yield("PBKDF2") end
+      end
+      dklen = dklen - clen
+      block = block+1
+      for k = 1, clen do out[#out+1] = ikey[k] end
+    end
+    return setmetatable(out, mt)
+  end
+end
+
+local function filterTurtleList()
+  for i = #filteredTurtles, 1, -1 do
+    filteredTurtles[i] = nil
+  end
+  local turtleCount = 0
+  for i = 1, #allTurtles do
+    if (type(fuelFilter) == "boolean" and fuelFilter and allTurtles[i].fuelState) or (not fuelFilter) or (type(fuelFilter) == "string" and not allTurtles[i].fuelState) then
+      turtleCount = turtleCount + 1
+      filteredTurtles[turtleCount] = { }
+      for k, v in pairs(allTurtles[i]) do
+        filteredTurtles[turtleCount][k] = v
+      end
+      filteredTurtles[turtleCount].atList = i
+    end
+  end
+  numPages = math.max(1, math.ceil(#filteredTurtles / 24))
+  pageNum = math.min(pageNum, numPages)
+end
+
+do
+  local function updateTurtleList(newSettings)
+    local turtleCount = #allTurtles
+    if turtleCount == 0 then                --# the list is empty
+      allTurtles[1] = { }
+      for k, v in pairs(newSettings) do     --# add this turtle
+        allTurtles[1][k] = v
+      end
+    else
+      local nsName, filterCount, done = newSettings.name, #filteredTurtles, false
+      for i = 1, turtleCount do
+        if gtHost == allTurtles[i].cc then    --# we're already on the list
+          for k, v in pairs(newSettings) do   --# update entry with current state of host
+            allTurtles[i][k] = v
+          end
+          for j = 1, filterCount do
+            if filteredTurtles[j].atList == i then
+              for k, v in pairs(newSettings) do
+                filteredTurtles[j][k] = v
+              end
+              done = true
+              break
+            end
+            if done then break end
+          end
+          return
+        end
+      end
+      for i = 1, turtleCount do
+        if nsName < allTurtles[i].name then --# alphabetize
+          table.insert(allTurtles, i, newSettings) --# insert
+          break
+        end
+        if i == turtleCount then            --# we've reached the end of the list
+          turtleCount = turtleCount + 1
+          allTurtles[turtleCount] = { }     --# tack it on
+          for k, v in pairs(newSettings) do
+            allTurtles[turtleCount][k] = v
+          end
+          break
+        end
+      end
+    end
+    filterTurtleList()
+  end
+
+  netReceive = function()
+    local id, success, encKey, message, encryptedMessage, decryptedMessage, decodedMessage
+    while true do
+      if not rednet.isOpen(netSide) then rednet.open(netSide) end
+      id, encryptedMessage = rednet.receive("gtRemote")
+      if type(encryptedMessage) == "string" then
+        success, decodedMessage = pcall(decode, encryptedMessage)
+        if success and type(decodedMessage) == "string" then
+          encKey = thisCC .. "gt!Remote" .. tostring(id)
+          success, decryptedMessage = pcall(decrypt, encKey, decodedMessage)
+          if success and type(decryptedMessage) == "string" then
+            success, message = pcall(textutils.unserialize, decryptedMessage)
+            if success and type(message) == "table" and message.program and message.program == "gtRemoteHost" then
+              gtHost = id
+              updateTurtleList(message)
+              if (((runState == "Inventory" or runState == "Remote") and gtHost == allTurtles[thisTurtle].cc) or runState == "List") and not inputting then
+                if runState == "Inventory" then
+                  drawHeader()
+                  turtleInventory()
+                elseif runState == "Remote" then
+                  turtleControlScreen()
+                else
+                  drawCLI()
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+local function netSend(targetHost, cmd1, act1)
+  local dataPack = textutils.serialize({ program = "gtRemote", cc = tonumber(thisCC), cmd = cmd1, action = act1 })
+  if not rednet.isOpen(netSide) then rednet.open(netSide) end
+  if targetHost == "ALL" then
+    local encKey = thisCC .. "gt!Remote_Broadcast" .. thisCC
+    local encryptedData = encode(encrypt(encKey, dataPack))
+    rednet.broadcast(encryptedData, "gtRemote")
+  else
+    local encKey = tostring(targetHost) .. "gt!Remote" .. thisCC
+    local encryptedData = encode(encrypt(encKey, dataPack))
+    rednet.send(targetHost, encryptedData, "gtRemote")
+  end
+end
+
+local function assignColor(assignment)
+  return colorBurst[assignment].color or silver
+end
+
+local function drawElement(x, y, w, h, txtColor, bgColor, text)
+  if type(w) == "boolean" then
+    term.setCursorPos(x, y)
+    term.setBackgroundColor(w and green or gray)
+    term.write("  ")
+    term.setBackgroundColor(w and gray or red)
+    term.write("  ")
+  else
+    text = text and tostring(text) or ""
+    local txtLen = #text
+    w = math.max(w, txtLen)
+    local spacer = (w - txtLen) / 2
+    local txtLine = string.rep(" ", math.floor(spacer)) .. text .. string.rep(" ", math.ceil(spacer))
+    if txtColor then term.setTextColor(txtColor) end
+    if bgColor then term.setBackgroundColor(bgColor) end
+    if h == 1 then
+      term.setCursorPos(x, y)
+      term.write(txtLine)
+    else
+      local line, textRow = string.rep(" ", w), y + math.floor(h / 2)
+      for i = y, y + h - 1 do
+        term.setCursorPos(x, i)         
+        term.write(i == textRow and txtLine or line) --# Draw one line of the 'element' (box/rectangle/line-seg)
+      end
+    end
+  end
+end
+
+drawHeader = function()
+  local hColor = (runState == "Remote" or runState == "Inventory" or runState == "color") and assignColor(allTurtles[thisTurtle].color) or blue
+  local hText = runState == "Help" and "gtRemote  " .. gtRver or ((runState == "Remote" or runState == "Inventory" or runState == "color") and allTurtles[thisTurtle].name .. " (cc# " .. tostring(allTurtles[thisTurtle].cc) .. ")" or "gtRemote")
+  drawElement(1, 1, termX, 1, white, hColor, hText) --# title bar
+  if runState == "List" or runState == "goPage" then
+    drawElement(1, 1, 3, 1, nil, nil, "[ ]")
+    local fColor = fuelFilter and green or gray
+    drawElement(2, 1, 1, 1, type(fuelFilter) == "boolean" and fColor or orange, nil, "F")
+    drawElement(termX - 2, 1, 3, 1, white, nil, "[ ]")
+    drawElement(termX - 1, 1, 1, 1, red, nil, "X")
+    drawElement(1, 2, 1, 1, green, gray, string.rep(" ", math.floor(termX / 4) - 2) .. "All ON" .. string.rep(" ", math.ceil(termX / 4) - 2))
+    drawElement(math.ceil(termX / 2), 2, 1, 1, red, nil, string.rep(" ", math.floor(termX / 4) - 2) .. "All OFF" .. string.rep(" ", math.ceil(termX / 4) - 2))
+  elseif runState == "Remote" or runState == "Inventory" or runState == "color" or runState == "Help" then
+    drawElement(1, 2, termX, 1, red, gray, "Close")
+  end
+end
+
+local function drawColorList(rating)
+  local color
+  drawElement(8, 4, 9, 8, nil, gray)                      --# menu body
+  for k, v in pairs(colorBurst) do
+    if rating == k then
+      color = v.color
+      drawElement(16, v.order + 3, 1, 1, nil, color, " ") --# selected color pip
+    else
+      color = silver
+    end
+    drawElement(7, v.order + 3, 1, 1, nil, v.color, " ")  --# rating color pips
+    if rating == "I" and k == "I" then color = white end
+    drawElement(9, v.order + 3, 1, 1, color, gray, v.text)
+  end
+end
+
+turtleInventory = function()
+  local currentSlot, selectedSlot, slotContents, isFuel, sCount, txtColor, bgColor = 0, allTurtles[thisTurtle].slot, allTurtles[thisTurtle].contents
+  for y = 7, 13, 2 do       --# y position
+    for x = 3, 12, 3 do     --# x position
+      currentSlot = currentSlot + 1 --# increment inventory slot
+      isFuel = allTurtles[thisTurtle].inv[currentSlot].isFuel
+      sCount = allTurtles[thisTurtle].inv[currentSlot].count
+      txtColor = currentSlot == selectedSlot and black or (sCount > 0 and sky or silver)
+      txtColor = (currentSlot ~= selectedSlot and isFuel) and yellow or txtColor
+      bgColor = currentSlot == selectedSlot and (isFuel and yellow or (sCount > 0 and sky or silver)) or black
+      drawElement(x, y, 2, 1, txtColor, bgColor, tostring(sCount)) --# write inventory count
+    end
+  end
+  drawElement(8, 16, 1, 1, allTurtles[thisTurtle].inv[selectedSlot].isFuel and yellow or (allTurtles[thisTurtle].inv[selectedSlot].count > 0 and sky or silver), black, slotContents .. string.rep(" ", 18 - #slotContents))
+  drawElement(13, 17, 1, 1, silver, nil, tDirection .. "     ")
+end
+
+local function staticTurtleInventory()
+  drawHeader()
+  drawElement(2, 4, termX - 2, 1, silver, black, allTurtles[thisTurtle].name .. "'s Inventory")
+  drawElement(2, 6, 13, 9, nil, gray) --# Inventory 'box'
+  drawElement(2, 16, 1, 1, gray, black, "Slot:")
+  drawElement(2, 17, 1, 1, nil, nil, "Direction:")
+  drawElement(16, 7, 9, 1, black, yellow, " Refuel")
+  drawElement(16, 9, 9, 1, nil, green, "Place")
+  drawElement(16, 11, 9, 1, nil, red, "Break")
+  drawElement(16, 13, 9, 1, nil, silver, "Equip")
+  drawElement(math.floor(termX / 2) - 9, termY - 1, 1, 1, white, brown, " Refresh Inventory ")
+  turtleInventory()
+end
+
+turtleControlScreen = function()
+  runState = "Remote"
+  drawHeader()
+  if thisTurtle <= #allTurtles then
+    drawElement(2, 4, 1, 1, assignColor(allTurtles[thisTurtle].color), black, allTurtles[thisTurtle].name) --# Name
+    drawElement(12, 4, 1, 1, red, black, "Redstone")     --# Redstone Output
+    drawElement(22, 4, allTurtles[thisTurtle].redstone)  --# Redstone Output Switch
+    drawElement(2, 6, 1, 1, silver, black, allTurtles[thisTurtle].note) --# Short description
+    local dCheck, tFwd, tUp, tDown = allTurtles[thisTurtle].dirCheck, allTurtles[thisTurtle].forward, allTurtles[thisTurtle].up, allTurtles[thisTurtle].down
+    local bColor = (tFwd and dCheck) and red or black    --# Direction buttons
+    drawElement(5, 8, 2, 1, bColor, white, "/\\")   --# Forward
+    drawElement(5, 9, 2, 1)                         --#
+    drawElement(5, 12, 2, 2, black, nil, "\\/")     --# Back
+    drawElement(3, 10, 2, 1, nil, nil, "/ ")        --# Left
+    drawElement(3, 11, 2, 1, nil, nil, "\\ ")       --#
+    drawElement(7, 10, 2, 1, nil, nil, " \\")       --# Right
+    drawElement(7, 11, 2, 1, nil, nil, " /")        --#
+    drawElement(5, 10, 2, 1, white, black, "..")    --# Center
+    drawElement(5, 11, 2, 1, nil, nil, "..")        --#
+    bColor = (tUp and dCheck) and red or black
+    drawElement(3, 8, 2, 1, bColor, gray, "/\\")    --# Up
+    drawElement(3, 9, 2, 1)                         --#
+    bColor = (tDown and dCheck) and red or black
+    drawElement(3, 12, 2, 2, bColor, gray, "\\/")   --# Down
+    if dCheck then
+      if (tDirection == "Up" and tUp) or (tDirection == "Down" and tDown) or (tDirection == "Forward" and tFwd) then
+        drawElement(7, 8, 2, 1, black, gray, "PL")  --# Place/Break
+        drawElement(7, 9, 2, 1, nil, red, "BR")
+      else
+        drawElement(7, 8, 2, 1, black, green, "PL") --# Place/Break
+        drawElement(7, 9, 2, 1, nil, gray, "BR")
+      end
+    else
+      drawElement(7, 8, 2, 1, black, gray, "PL")    --# Place/Break
+      drawElement(7, 9, 2, 1, nil, nil, "BR")
+    end
+    drawElement(7, 12, 2, 1, black, dCheck and gray or red, "OB")
+    drawElement(7, 13, 2, 1, nil, dCheck and green or gray, "CK")
+    drawElement(12, 8, 1, 1, gray, black, "Fuel")        --# Fuel Gauge
+    local fuelPercent = allTurtles[thisTurtle].fuelPercent
+    local fuelColor = fuelPercent > 49 and green or orange
+    drawElement(17, 8, 1, 1, fuelPercent < 10 and red or fuelColor, nil, fuelPercent < 101 and tostring(fuelPercent) or "Unlimited")
+    if fuelPercent < 101 then
+      term.setTextColor(gray)
+      term.write("%  ")
+      drawElement(12, 9, 1, 1, nil, nil, showFuel and "Units " or "Coal ")
+      term.setTextColor(silver)
+      term.write(showFuel and (tostring(allTurtles[thisTurtle].fuelAmount) .. "   ") or (tostring(allTurtles[thisTurtle].coal) .. "   "))
+    end
+    drawElement(12, 11, 1, 1, gray, nil, "PLBR")         --# Place/Break direction
+    drawElement(17, 11, 1, 1, silver, nil, tDirection .. "     ")
+    drawElement(12, 12, 1, 1, gray, nil, "Slot")         --# Slot selection
+    local selectedSlot = allTurtles[thisTurtle].slot
+    drawElement(17, 12, 1, 1, silver, nil, tostring(selectedSlot) .. " | " .. tostring(allTurtles[thisTurtle].inv[selectedSlot].count) .. "  ")
+    drawElement(12, 13, 14, 1, nil, nil, "<            >")
+    drawElement(14, 13, 10, 1, nil, gray)
+    drawElement(14, 13, 10, 1, allTurtles[thisTurtle].inv[selectedSlot].isFuel and yellow or (allTurtles[thisTurtle].inv[selectedSlot].count > 0 and sky or silver), nil, allTurtles[thisTurtle].contents:sub(1, 10)) --# Selected slot contents
+    drawElement(16, 15, 9, 1, black, nil, "Refresh")     --# Turtle location (Refresh GPS fix button)
+    drawElement(16, 16, 9, 1, nil, nil, "GPS Fix")
+    if allTurtles[thisTurtle].loc.x ~= "No GPS Fix" then --# pgps export (export to pocketgps button)
+      drawElement(16, 17, 9, 1, nil, silver, "Export")
+      drawElement(16, 18, 9, 1, nil, nil, "to pgps")
+    end
+    drawElement(2, 15, 1, 1, silver, black, "Location:") --# Turtle location (x/y/z)
+    drawElement(2, 16, 1, 1, nil, nil, "x:")
+    drawElement(2, 17, 1, 1, nil, nil, "y:")
+    drawElement(2, 18, 1, 1, nil, nil, "z:")
+    drawElement(5, 16, 1, 1, sky, nil, tostring(allTurtles[thisTurtle].loc.x))
+    drawElement(5, 17, 1, 1, nil, nil, tostring(allTurtles[thisTurtle].loc.y))
+    drawElement(5, 18, 1, 1, nil, nil, tostring(allTurtles[thisTurtle].loc.z))
+  end
+end
+
+local function drawHelpUI()
+  drawElement(1, 3, termX, termY - 2, nil, white)
+  drawHeader()
+  if tempState == "List" then
+    drawElement(2, 4, termX - 1, 1, black, white, "Left click a turtle to")
+    drawElement(2, 5, termX - 1, 1, nil, nil, "control and manage it")
+    drawElement(2, 7, termX - 1, 1, nil, nil, "Middle click a turtle to")
+    drawElement(2, 8, termX - 1, 1, nil, nil, "lock it")
+    drawElement(2, 11, termX - 1, 1, nil, nil, "'All ON / All OFF'")
+    drawElement(2, 12, termX - 1, 1, nil, nil, "controls redstone output")
+    drawElement(2, 13, termX - 1, 1, nil, nil, "on turtles in range")
+    drawElement(2, 15, termX - 1, 1, nil, nil, "[F] = Fuel Filter")
+    drawElement(2, 16, termX - 1, 1, nil, nil, "Filters turtles based")
+    drawElement(2, 17, termX - 1, 1, nil, nil, "on fueled status")
+  elseif tempState == "Remote" then
+    drawElement(2, 4, termX - 1, 1, black, white, "Click arrows to drive")
+    drawElement(2, 5, termX - 1, 1, nil, nil, "or use [W, A, S, D, Q, E]")
+    drawElement(2, 7, termX - 1, 1, nil, nil, "PL/BR[P] = Place/Break   ")
+    drawElement(2, 8, termX - 1, 1, nil, nil, "OB/CK[O] = Obstacle check")
+    drawElement(2, 10, termX - 1, 1, nil, nil, "Left click name or note")
+    drawElement(2, 11, termX - 1, 1, nil, nil, "to edit")
+    drawElement(2, 12, termX - 1, 1, nil, nil, "Right click name to")
+    drawElement(2, 13, termX - 1, 1, nil, nil, "change color")
+    drawElement(2, 15, termX - 1, 1, nil, nil, "Redstone [R] controls")
+    drawElement(2, 16, termX - 1, 1, nil, nil, "RS output on the front")
+    drawElement(2, 18, termX - 1, 1, nil, nil, "'Export to pgps' adds")
+    drawElement(2, 19, termX - 1, 1, nil, nil, "turtle to pgps .places")
+  elseif tempState == "Inventory" then
+    drawElement(2, 4, termX - 1, 1, black, white, "Click inventory slots")
+    drawElement(2, 5, termX - 1, 1, nil, nil, "to select for action")
+    drawElement(2, 7, termX - 1, 1, nil, nil, "Click action button")
+    drawElement(2, 8, termX - 1, 1, nil, nil, "to carry out action")
+    drawElement(2, 10, termX - 1, 1, nil, nil, "Right click 'Place' to")
+    drawElement(2, 11, termX - 1, 1, nil, nil, "engrave a sign")
+    drawElement(2, 13, termX - 1, 1, nil, nil, "Right click 'Break' to")
+    drawElement(2, 14, termX - 1, 1, nil, nil, "attack")
+    drawElement(2, 16, termX - 1, 1, nil, nil, "Left click the displayed")
+    drawElement(2, 17, termX - 1, 1, nil, nil, "direction to change the")
+    drawElement(2, 18, termX - 1, 1, nil, nil, "direction of action")
+  end
+end
+
+local function drawNaviUI()
+  local pNum = tostring(pageNum)
+  if pageNum < 100 then pNum = "0" .. pNum end --# Add a "0" before double digit page numbers
+  if pageNum < 10 then pNum = "0" .. pNum end  --# Add another "0" before single digit page numbers
+  drawElement(math.floor(termX / 2) - 10, termY, 7, 1, gray, black, pageNum > 1 and "<< BACK" or "       ")
+  drawElement(math.floor(termX / 2) + 4, termY, 7, 1, nil, nil, pageNum < numPages and "NEXT >>" or "       ")
+  drawElement(math.floor((termX - #pNum) / 2) + 1, termY, 3, 1, silver, nil, pNum) --# Page Number
+end
+
+local function drawMainUI() --# Turtle 'Address Book'
+  local xPos, yPos, tName, tFuelState, tColor, spacer = 1, 4
+  local magicNumber = ((pageNum - 1) * 23) + pageNum
+  for i = magicNumber, math.min(#filteredTurtles, pageNum * 24) do
+    term.setCursorPos(xPos, yPos)
+    tFuelState, tColor = filteredTurtles[i].fuelState, filteredTurtles[i].color
+    if not filteredTurtles[i].lockState then
+      term.setTextColor(tFuelState and white or assignColor(tColor))
+      term.setBackgroundColor(tFuelState and assignColor(tColor) or black)
+    else
+      term.setTextColor(tFuelState and silver or gray)
+      term.setBackgroundColor(tFuelState and gray or black)
+    end
+    tName = filteredTurtles[i].name
+    spacer = (8 - #tName) / 2
+    term.write(string.rep(" ", math.floor(spacer)) .. tName .. string.rep(" ", math.ceil(spacer)))
+    yPos = yPos + 2
+    if yPos > 19 then yPos = 4 xPos = xPos + 9 end
+  end
+end
+
+do
+  local runStates = {
+    List = function() drawMainUI() drawNaviUI() end;
+    Remote = function() turtleControlScreen() end;
+    Inventory = function() staticTurtleInventory() end;
+  }
+
+  drawCLI = function() --# Client Interface 'decider'
+    if not inputting then
+      drawHeader()
+      if runStates[runState] then runStates[runState]() end
+    end
+  end
+end
+
+local function readInput(cX, cY, cO, bG, limit, mask) --# cursor X, Y, text color, bg color, character limit, character mask
+  local word, pos = "", 0
+  local curX, curY = cX, cY
+  inputting, timerDelay = true, true
+  os.cancelTimer(pollTimer)
+  bG = bG or black
+  limit = (limit and type(limit) == "number" and limit > 0) and limit or 21
+  term.setCursorPos(curX, curY)
+  term.setTextColor(cO)
+  term.setBackgroundColor(bG)
+  term.setCursorBlink(true)
+  while true do
+    local event, data, mX, mY = os.pullEvent()
+    if event == "key" then
+      if data == keys.backspace then
+        if curX > cX then
+          curX = math.max(cX, curX - 1)
+          pos = math.max(0, pos - 1)
+          word = word:sub(1, #word - 1)
+        end
+        drawElement(curX, curY, 1, 1, cO, bG, " ")
+        term.setCursorPos(curX, curY)
+      elseif data == keys.enter or data == keys.numPadEnter then
+        break
+      end
+    elseif event == "char" and pos < limit then
+      drawElement(curX, curY, 1, 1, cO, bG, mask or data)
+      word = word .. data
+      curX = curX + 1
+      pos = pos + 1
+    elseif event == "paste" and pos < limit then
+      if pos + #data > limit then
+        data = data:sub(1, limit - pos)
+      end
+      drawElement(curX, curY, 1, 1, cO, bG, mask and string.rep(mask, #data) or data)
+      word = word .. data
+      curX = curX + #data
+      pos = pos + #data
+    elseif event == "mouse_click" then
+      if mY ~= curY or mX < cX or mX >= cX + limit then
+        break
+      end
+    end
+  end
+  term.setCursorBlink(false)
+  inputting = false
+  return word
+end
+
+do
+  local function toggleFuelFilter()
+    if type(fuelFilter) == "boolean" then
+      fuelFilter = fuelFilter and "noFuel" or true
+    else
+      fuelFilter = false
+    end
+    filterTurtleList()
+    drawElement(1, 3, termX, termY - 2, nil, black)
+    drawCLI()
+  end
+
+  local function execPLBR(check)
+    if check then
+      if (tDirection == "Up" and allTurtles[thisTurtle].up) or (tDirection == "Down" and allTurtles[thisTurtle].down) or (tDirection == "Forward" and allTurtles[thisTurtle].forward) then
+        drawElement(7, 8, 2, 1, white, red, "PL")   --# Place/Break
+        drawElement(7, 9, 2, 1, nil, nil, "BR")
+        sleep(0.1)
+        drawElement(7, 8, 2, 1, black, gray, "PL")  --# Place/Break
+        drawElement(7, 9, 2, 1, nil, red, "BR")
+      else
+        drawElement(7, 8, 2, 1, white, green, "PL") --# Place/Break
+        drawElement(7, 9, 2, 1, nil, nil, "BR")
+        sleep(0.1)
+        drawElement(7, 8, 2, 1, black, nil, "PL")   --# Place/Break
+        drawElement(7, 9, 2, 1, nil, gray, "BR")
+      end
+    else
+      drawElement(7, 8, 2, 1, black, white, "PL")   --# Place/Break
+      drawElement(7, 9, 2, 1, nil, nil, "BR")
+      sleep(0.1)
+      drawElement(7, 8, 2, 1, nil, gray, "PL")      --# Place/Break
+      drawElement(7, 9, 2, 1, nil, nil, "BR")
+    end
+    if not check or ((tDirection == "Up" and allTurtles[thisTurtle].up) or (tDirection == "Down" and allTurtles[thisTurtle].down) or (tDirection == "Forward" and allTurtles[thisTurtle].forward)) then
+      netSend(allTurtles[thisTurtle].cc, "dig", tDirection)
+    else
+      netSend(allTurtles[thisTurtle].cc, "put", tDirection)
+    end
+  end
+
+  local function inputArrow(direction)
+    if direction == "up" then
+      drawElement(3, 8, 2, 1, black, white, "/\\")  --# Up
+      drawElement(3, 9, 2, 1)
+      sleep(0.1)
+      drawElement(3, 8, 2, 1, black, gray, "/\\")   --# Up
+      drawElement(3, 9, 2, 1)
+      netSend(allTurtles[thisTurtle].cc, "move", "up")
+    elseif direction == "down" then
+      drawElement(3, 12, 2, 2, black, white, "\\/") --# Down
+      sleep(0.1)
+      drawElement(3, 12, 2, 2, nil, gray, "\\/")    --# Down
+      netSend(allTurtles[thisTurtle].cc, "move", "down")
+    elseif direction == "forward" then
+      drawElement(5, 8, 2, 1, white, gray, "/\\")   --# Forward
+      drawElement(5, 9, 2, 1)
+      sleep(0.1)
+      drawElement(5, 8, 2, 1, black, white, "/\\")  --# Forward
+      drawElement(5, 9, 2, 1)
+      netSend(allTurtles[thisTurtle].cc, "move", "forward")
+    elseif direction == "back" then
+      drawElement(5, 12, 2, 2, white, gray, "\\/")  --# Back
+      sleep(0.1)
+      drawElement(5, 12, 2, 2, black, white, "\\/") --# Back
+      netSend(allTurtles[thisTurtle].cc, "move", "back")
+    elseif direction == "left" then
+      drawElement(3, 10, 2, 1, white, gray, "/ ")   --# Left
+      drawElement(3, 11, 2, 1, nil, nil, "\\ ")     --#
+      sleep(0.1)
+      drawElement(3, 10, 2, 1, black, white, "/ ")  --# Left
+      drawElement(3, 11, 2, 1, nil, nil, "\\ ")     --#
+      netSend(allTurtles[thisTurtle].cc, "move", "left")
+    elseif direction == "right" then
+      drawElement(7, 10, 2, 1, white, gray, " \\")  --# Right
+      drawElement(7, 11, 2, 1, nil, nil, " /")      --#
+      sleep(0.1)
+      drawElement(7, 10, 2, 1, black, white, " \\") --# Right
+      drawElement(7, 11, 2, 1, nil, nil, " /")      --#
+      netSend(allTurtles[thisTurtle].cc, "move", "right")
+    end
+  end
+
+  local directions = {
+    Up = "Down";
+    Down = "Forward";
+    Forward = "Up";
+  }
+
+  local invSelect = {
+    [3] = { [7] = 1, [9] = 5, [11] = 9, [13] = 13 }; --# [xCoord] = { [yCoord] = slot, [yCoord] = slot, etc. }
+    [4] = { [7] = 1, [9] = 5, [11] = 9, [13] = 13 };
+    [6] = { [7] = 2, [9] = 6, [11] = 10, [13] = 14 };
+    [7] = { [7] = 2, [9] = 6, [11] = 10, [13] = 14 };
+    [9] = { [7] = 3, [9] = 7, [11] = 11, [13] = 15 };
+    [10] = { [7] = 3, [9] = 7, [11] = 11, [13] = 15 };
+    [12] = { [7] = 4, [9] = 8, [11] = 12, [13] = 16 };
+    [13] = { [7] = 4, [9] = 8, [11] = 12, [13] = 16 };
+  }
+
+  local keyList = {
+    [16] = function() inputArrow("down") end;    --# Q (down)
+    [17] = function() inputArrow("forward") end; --# W (forward)
+    [18] = function() inputArrow("up") end;      --# E (up)
+    [19] = function() netSend(allTurtles[thisTurtle].cc, "rds", not allTurtles[thisTurtle].redstone) end; --# R (redstone)
+    [24] = function() netSend(allTurtles[thisTurtle].cc, "dcToggle", not allTurtles[thisTurtle].dirCheck) end; --# O (Obstacle check)
+    [25] = function() execPLBR(allTurtles[thisTurtle].dirCheck) end; --# P (Place/Break)
+    [30] = function() inputArrow("left") end;    --# A (left)
+    [31] = function() inputArrow("back") end;    --# S (back)
+    [32] = function() inputArrow("right") end;   --# D (right)
+  }
+
+  local function inputMain()
+    local event, mButton, mcX, mcY, xPos, yPos, magicNumber
+    while true do
+      event, mButton, mcX, mcY = os.pullEvent()
+      if event == "mouse_click" then
+        if runState == "Help" then
+          if mcY == 2 then
+            drawElement(1, 2, termX, termY - 1, nil, black)
+            runState = tempState
+            drawCLI()
+          end
+        elseif runState == "Remote" then
+          if mcY == 2 then                      --# Exit Remote/Edit Screen
+            drawElement(2, 2, termX, termY, nil, black)
+            runState = "List"
+            drawCLI()
+          elseif mcY == 4 then
+            if mcX > 1 and mcX < 10 and mButton ~= 3 then
+              if mButton == 1 then              --# Edit Turtle Name
+                drawElement(2, 4, 1, 1, gray, black, allTurtles[thisTurtle].name)
+                runState = "EditName"
+              else                              --# Change color assignment
+                drawColorList(allTurtles[thisTurtle].color)
+                runState = "color"
+              end
+              return
+            elseif mcX > 21 and mcX < 26 and mButton == 1 then --# Redstone output
+              netSend(allTurtles[thisTurtle].cc, "rds", not allTurtles[thisTurtle].redstone)
+            end
+          elseif mcY == 6 and mButton == 1 then --# Edit Turtle Note
+            if mcX > 1 then
+              drawElement(2, 6, 1, 1, gray, black, allTurtles[thisTurtle].note)
+              term.setBackgroundColor(black)
+              runState = "EditNote"
+              return
+            end
+          elseif mcY == 8 and mButton == 1 then --# Movement / Actions
+            if mcX > 2 and mcX < 5 then         --# UP
+              inputArrow("up")
+            elseif mcX > 4 and mcX < 7 then     --# Forward
+              inputArrow("forward")
+            elseif mcX > 6 and mcX < 9 then     --# Place/Break
+              execPLBR(allTurtles[thisTurtle].dirCheck)
+            end
+          elseif mcY == 9 and mButton == 1 then
+            if mcX > 2 and mcX < 5 then         --# UP
+              inputArrow("up")
+            elseif mcX > 4 and mcX < 7 then     --# Forward
+              inputArrow("forward")
+            elseif mcX > 6 and mcX < 9 then     --# Tunnel
+              execPLBR(allTurtles[thisTurtle].dirCheck)
+            elseif mcX > 11 and mcX < termX and allTurtles[thisTurtle].fuelPercent < 101 then --# Fuel/Coal filter
+              showFuel = not showFuel
+              drawElement(12, 9, 1, 1, gray, black, showFuel and "Units " or "Coal ")
+              term.setTextColor(silver)
+              term.write(showFuel and (tostring(allTurtles[thisTurtle].fuelAmount)) or (tostring(allTurtles[thisTurtle].coal) .. "     "))
+            end
+          elseif mcY == 10 and mButton == 1 then
+            if mcX > 2 and mcX < 5 then         --# Left
+              inputArrow("left")
+            elseif mcX > 4 and mcX < 7 then     --# Center
+              runState = "shellCmd"
+              return
+            elseif mcX > 6 and mcX < 9 then     --# Right
+              inputArrow("right")
+            end
+          elseif mcY == 11 and mButton == 1 then
+            if mcX > 2 and mcX < 5 then         --# Left
+              inputArrow("left")
+            elseif mcX > 4 and mcX < 7 then     --# Center
+              runState = "shellCmd"
+              return
+            elseif mcX > 6 and mcX < 9 then     --# Right
+              inputArrow("right")
+            elseif mcX > 11 and mcX < termX - 1 then --# Change direction of action
+              tDirection = directions[tDirection]
+              drawElement(17, 11, 1, 1, silver, black, tDirection .. "     ")
+              if allTurtles[thisTurtle].dirCheck then
+                if (tDirection == "Up" and allTurtles[thisTurtle].up) or (tDirection == "Down" and allTurtles[thisTurtle].down) or (tDirection == "Forward" and allTurtles[thisTurtle].forward) then
+                  drawElement(7, 8, 2, 1, black, gray, "PL")  --# Place/Break
+                  drawElement(7, 9, 2, 1, nil, red, "BR")
+                else
+                  drawElement(7, 8, 2, 1, black, green, "PL") --# Place/Break
+                  drawElement(7, 9, 2, 1, nil, gray, "BR")
+                end
+              end
+            end
+          elseif mcY == 12 and mButton == 1 then
+            if mcX > 2 and mcX < 5 then         --# DOWN
+              inputArrow("down")
+            elseif mcX > 4 and mcX < 7 then     --# Back
+              inputArrow("back")
+            elseif mcX > 6 and mcX < 9 then     --# Obstacle check
+              netSend(allTurtles[thisTurtle].cc, "dcToggle", not allTurtles[thisTurtle].dirCheck)
+            end
+          elseif mcY == 13 and mButton == 1 then
+            if mcX > 2 and mcX < 5 then         --# DOWN
+              inputArrow("down")
+            elseif mcX > 4 and mcX < 7 then     --# Back
+              inputArrow("back")
+            elseif mcX > 6 and mcX < 9 then     --# Obstacle check
+              netSend(allTurtles[thisTurtle].cc, "dcToggle", not allTurtles[thisTurtle].dirCheck)
+            elseif mcX == 12 or mcX == termX - 1 then --# Select inventory slot
+              local selectedSlot = allTurtles[thisTurtle].slot
+              selectedSlot = mcX == 12 and selectedSlot - 1 or selectedSlot + 1
+              if selectedSlot < 1 then selectedSlot = 16 end
+              if selectedSlot > 16 then selectedSlot = 1 end
+              netSend(allTurtles[thisTurtle].cc, "sel", selectedSlot)
+            elseif mcX > 13 and mcX < termX - 2 then --# Open inventory screen
+              netSend(allTurtles[thisTurtle].cc, "inv", "inv")
+              drawElement(1, 2, termX, termY - 1, nil, black)
+              runState = "Inventory"
+              drawCLI()
+            end
+          elseif (mcY == 15 or mcY == 16) and mButton == 1 then --# Refresh GPS fix
+            if mcX > 15 and mcX < 25 then
+              drawElement(16, 15, 9, 1, white, gray, "Refresh")
+              drawElement(16, 16, 9, 1, nil, nil, "GPS Fix")
+              sleep(0.1)
+              drawElement(16, 15, 9, 1, black, nil, "Refresh")
+              drawElement(16, 16, 9, 1, nil, nil, "GPS Fix")
+              netSend(allTurtles[thisTurtle].cc, "gpsLoc")
+            end
+          elseif (mcY == 17 or mcY == 18) and mButton == 1 then
+            if mcX > 15 and mcX < 25 and allTurtles[thisTurtle].loc.x ~= "No GPS Fix" then --# Export to Lyqyd's pocketgps
+              drawElement(16, 17, 9, 1, white, silver, "Export")
+              drawElement(16, 18, 9, 1, nil, nil, "to pgps")
+              sleep(0.1)
+              drawElement(16, 17, 9, 1, black, nil, "Export")
+              drawElement(16, 18, 9, 1, nil, nil, "to pgps")
+              local pgpsPlaces = fs.open("/.places", fs.exists("/.places") and "a" or "w")
+              pgpsPlaces.writeLine(allTurtles[thisTurtle].loc.x .. ", " .. allTurtles[thisTurtle].loc.y .. ", " .. allTurtles[thisTurtle].loc.z .. ", " .. allTurtles[thisTurtle].name)
+              pgpsPlaces.close()
+            end
+          end
+        elseif runState == "Inventory" then
+          if mcY == 2 and mButton == 1 then --# Close
+            drawElement(1, 2, termX, termY - 1, nil, black)
+            runState = "Remote"
+            drawCLI()
+          elseif mcY == 17 and mButton == 1 then
+            if mcX > 12 and mcX < 20 then   --# Choose direction of action
+              tDirection = directions[tDirection]
+              drawElement(13, 17, 1, 1, silver, black, tDirection .. "     ")
+            end
+          elseif mcY == termY - 1 and mButton == 1 then --# Refresh inventory
+            drawElement(math.floor(termX / 2) - 9, termY - 1, 1, 1, black, silver, " Refresh Inventory ")
+            sleep(0.1)
+            drawElement(math.floor(termX / 2) - 9, termY - 1, 1, 1, white, brown, " Refresh Inventory ")
+            netSend(allTurtles[thisTurtle].cc, "inv", "inv")
+          end
+          if mcX < 15 and mButton == 1 then --# Inventory
+            if invSelect[mcX] and invSelect[mcX][mcY] then
+              netSend(allTurtles[thisTurtle].cc, "sel", invSelect[mcX][mcY])
+            end
+          elseif mcX > 14 then              --# Refuel/Place/Break/Equip
+            if mcY == 7 then           --# Refuel
+              drawElement(16, 7, 9, 1, white, gray, " Refuel")
+              sleep(0.1)
+              drawElement(16, 7, 9, 1, black, yellow, " Refuel")
+              if mButton == 1 then
+                netSend(allTurtles[thisTurtle].cc, "refuel", 1)
+              elseif mButton == 2 then
+                netSend(allTurtles[thisTurtle].cc, "refuel", 10)
+              elseif mButton == 3 then
+                netSend(allTurtles[thisTurtle].cc, "refuel", allTurtles[thisTurtle].inv[allTurtles[thisTurtle].slot].count)
+              end
+            elseif mcY == 9 and mButton ~= 3 then --# Place or engrave
+              drawElement(16, 9, 9, 1, white, gray, "Place")
+              sleep(0.1)
+              drawElement(16, 9, 9, 1, black, green, "Place")
+              if mButton == 1 then     --# Place
+                netSend(allTurtles[thisTurtle].cc, "put", tDirection)
+              elseif mButton == 2 and allTurtles[thisTurtle].contents == "sign" then --# Engrave
+                runState = "engrave"
+                return
+              end
+            elseif mcY == 11 and mButton ~= 3 then --# All units, break and attack!
+              drawElement(16, 11, 9, 1, white, gray, "Break")
+              sleep(0.1)
+              drawElement(16, 11, 9, 1, black, red, "Break")
+              if mButton == 1 then     --# Break
+                netSend(allTurtles[thisTurtle].cc, "dig", tDirection)
+              elseif mButton == 2 then --# Attack
+                netSend(allTurtles[thisTurtle].cc, "atk", tDirection)
+              end
+            elseif mcY == 13 and mButton ~= 3 then --# Equip
+              drawElement(16, 13, 9, 1, white, gray, "Equip")
+              sleep(0.1)
+              drawElement(16, 13, 9, 1, black, silver, "Equip")
+              if mButton == 1 then     --# Equip left
+                netSend(allTurtles[thisTurtle].cc, "eqp", "left")
+              elseif mButton == 2 then --# Equip right
+                netSend(allTurtles[thisTurtle].cc, "eqp", "right")
+              end
+            end
+          end
+        elseif runState == "List" then
+          if mcY == 1 and mButton == 1 then
+            if mcX > 0 and mcX < 4 then --# Fuel filter
+              toggleFuelFilter()
+            elseif mcX > termX - 3 and mcX <= termX then --# Quit
+              kernelState = false
+              if rednet.isOpen(netSide) then rednet.close(netSide) end
+              term.setBackgroundColor(black)
+              term.setTextColor(white)
+              term.clear()
+              term.setCursorPos(1, 1)
+              return
+            end
+          elseif mcY == 2 and mButton == 1 then --# ALL ON/OFF
+            netSend("ALL", "rds", mcX < termX / 2)
+          elseif mcY > 3 and mcY < 19 then --# Open a turtle's properties/control screen
+            magicNumber, xPos, yPos = ((pageNum - 1) * 23) + pageNum, 1, 4
+            for i = magicNumber, math.min(#filteredTurtles, pageNum * 24) do
+              if mcX >= xPos and mcX < xPos + 8 and mcY == yPos then
+                thisTurtle = filteredTurtles[i].atList
+                if not filteredTurtles[i].lockState then
+                  if mButton == 1 or mButton == 2 then
+                    netSend(allTurtles[thisTurtle].cc, "inv", "inv")
+                    drawElement(1, 2, termX, termY - 1, nil, black)
+                    turtleControlScreen()
+                  elseif mButton == 3 then
+                    netSend(allTurtles[thisTurtle].cc, "lock")
+                  end
+                  break
+                else
+                  runState = "password"
+                  return
+                end
+              end
+              yPos = yPos + 2
+              if yPos > 19 then yPos = 4 xPos = xPos + 9 end
+            end
+          elseif mcY == termY and numPages > 1 and mButton == 1 then --# Page Navigation via click
+            if mcX < math.floor(termX / 2) - 3 or mcX > math.floor(termX / 2) + 3 then --# Page Back / Forward
+              pageNum = mcX < math.floor(termX / 2) - 3 and math.max(1, pageNum - 1) or math.min(pageNum + 1, numPages)
+              if pageNum == numPages and numPages > 1 then drawElement(2, 4, termX, termY, nil, black) end
+              drawMainUI()
+              drawNaviUI()
+            elseif mcX > math.floor(termX / 2) - 2 and mcX < math.floor(termX / 2) + 2 then --# Page Numbers (Go To Page dialogue)
+              runState = "goPage"
+              return
+            end
+          end
+        end
+      elseif event == "mouse_scroll" and runState == "List" then
+        pageNum = mButton == 1 and math.min(pageNum + 1, numPages) or math.max(1, pageNum - 1)
+        if pageNum == numPages and numPages > 1 then drawElement(2, 4, termX, termY, nil, black) end
+        drawMainUI()
+        drawNaviUI()
+      elseif event == "key" then
+        if mButton == keys.f1 then --# F1 / Help
+          if runState ~= "Help" then
+            tempState = runState
+            runState = "Help"
+            drawHelpUI()
+          else
+            runState = tempState
+            drawElement(1, 3, termX, termY - 2, nil, black)
+            drawCLI()
+          end
+        end
+        if runState == "List" then
+          if mButton == 33 then --# F / Fuel Filter
+            toggleFuelFilter()
+          end
+        elseif runState == "Remote" then
+          if keyList[mButton] then keyList[mButton]() end
+        end
+      end
+    end
+  end
+
+  local function colorPicker()
+    local choice = false
+    local _, button, x, y = os.pullEvent("mouse_click")
+    if x > 6 and x < 17 and y > 3 and y < 12 and button == 1 then
+      for colorChoice = 4, 11 do
+        if y == colorChoice then
+          for k, v in pairs(colorBurst) do
+            if (colorChoice - 3) == v.order then
+              netSend(allTurtles[thisTurtle].cc, "color", k)
+              choice = true
+              break
+            end
+          end
+        end
+        if choice then break end
+      end
+    end
+    drawElement(7, 4, 10, 8, nil, black)
+    turtleControlScreen()
+  end
+
+  local function editEntry()
+    if runState == "EditName" then
+      drawElement(2, 4, 1, 1, gray, black, allTurtles[thisTurtle].name)
+      local newName = readInput(2, 4, yellow, nil, 8)
+      if newName ~= "" then
+        netSend(allTurtles[thisTurtle].cc, "name", newName)
+        drawElement(2, 4, 8, 1)
+      else
+        drawElement(2, 4, 1, 1, assignColor(allTurtles[thisTurtle].color), nil, allTurtles[thisTurtle].name)
+      end
+    elseif runState == "EditNote" then
+      drawElement(2, 6, 1, 1, gray, black, allTurtles[thisTurtle].note)
+      local newNote = readInput(2, 6, white, nil, 21)
+      if newNote ~= "" then
+        netSend(allTurtles[thisTurtle].cc, "note", newNote)
+        drawElement(2, 6, 21, 1)
+      else
+        drawElement(2, 6, 1, 1, silver, nil, allTurtles[thisTurtle].note)
+      end
+    end
+    runState = "Remote"
+  end
+
+  local function enterPassword()
+    drawElement(math.floor(termX / 2) - 7, 8, 15, 1, white, gray, "   Password:   ")
+    drawElement(math.floor(termX / 2) - 7, 9, 15, 2)
+    drawElement(math.floor(termX / 2) - 6, 9, 13, 1, nil, black) --# input area bg
+    local pass = readInput(math.floor(termX / 2) - 6, 9, lime, nil, 13, "*")
+    if pass ~= "" then
+      local pw = table.concat(pbkdf2(pass, "gt!Remote", 15))
+      netSend(allTurtles[thisTurtle].cc, "unlock", pw)
+    end
+    drawElement(math.floor(termX / 2) - 7, 8, 15, 3)
+    runState = "List"
+    drawMainUI()
+  end
+
+  local function goToPage()
+    drawElement(math.floor(termX / 2) - 3, termY - 3, 7, 1, white, gray, "Page:")
+    drawElement(math.floor(termX / 2) - 3, termY - 2, 7, 2)
+    drawElement(math.floor(termX / 2) - 2, termY - 2, 5, 1, nil, black) --# input area bg
+    local newPage = tonumber(readInput(math.floor(termX / 2) - 1, termY - 2, lime, nil, 3))
+    pageNum = newPage or pageNum
+    pageNum = math.max(1, math.min(pageNum, numPages))
+    if pageNum == numPages and numPages > 1 then
+      drawElement(1, 4, termX, termY - 3)
+    else
+      drawElement(math.floor(termX / 2) - 3, termY - 3, 7, 3)
+    end
+    runState = "List"
+    drawMainUI()
+    drawNaviUI()
+  end
+
+  local function getSignText()
+    drawElement(math.floor(termX / 2) - 8, math.floor(termY / 2) - 1, 17, 1, black, silver, "Engrave")
+    drawElement(math.floor(termX / 2) - 8, math.floor(termY / 2), 17, 2)
+    drawElement(math.floor(termX / 2) - 7, math.floor(termY / 2), 15, 1, nil, black) --# input area bg
+    local newText = readInput(math.floor(termX / 2) - 7, math.floor(termY / 2), lime)
+    if newText ~= "" then
+      netSend(allTurtles[thisTurtle].cc, "put", newText)
+    end
+    drawElement(math.floor(termX / 2) - 8, math.floor(termY / 2) - 1, 17, 3)
+    runState = "Inventory"
+    staticTurtleInventory()
+  end
+
+  local function shellCommand()
+    drawElement(2, 8, termX - 2, 1, white, gray, "Command:")
+    drawElement(2, 9, termX - 2, 2)
+    drawElement(3, 9, termX - 4, 1, nil, black) --# input area bg
+    local sCommand = readInput(3, 9, lime, nil, 22)
+    if sCommand ~= "" then
+      netSend(allTurtles[thisTurtle].cc, "sCmd", sCommand)
+    end
+    drawElement(2, 8, termX - 2, 3)
+    turtleControlScreen()
+  end
+
+  local runStates = {
+    List = function() inputMain() end;
+    Remote = function() inputMain() end;
+    Inventory = function() inputMain() end;
+    Help = function() inputMain() end;
+    EditName = function() editEntry() end;
+    EditNote = function() editEntry() end;
+    password = function() enterPassword() end;
+    engrave = function() getSignText() end;
+    shellCmd = function() shellCommand() end;
+    goPage = function() goToPage() end;
+    color = function() colorPicker() end;
+  }
+
+  userInput = function()
+    repeat
+      if runStates[runState] then runStates[runState]() end
+      if kernelState and timerDelay and not inputting then
+        timerDelay = false
+        pollTimer = os.startTimer(0.1)
+      end
+    until not kernelState
+  end
+end
+
+local function dataPoller()
+  local removal, _, timer = false
+  while true do
+    _, timer = os.pullEvent("timer")
+    if timer == pollTimer then
+      if runState == "List" then
+        for i = #allTurtles, 1, -1 do
+          if allTurtles[i].quietCount > 1 then
+            table.remove(allTurtles, i)
+            removal = true
+          else
+            allTurtles[i].quietCount = allTurtles[i].quietCount + 1
+          end
+        end
+        if removal then
+          removal = false
+          filterTurtleList()
+          drawElement(1, 4, termX, termY - 3, nil, black)
+          drawMainUI()
+          drawNaviUI()
+        end
+      end
+      if not timerDelay then
+        netSend("ALL", "gtrQRY", "gtrQRY")
+        pollTimer = os.startTimer(5)
+      end
+    end
+  end
+end
+
+term.setBackgroundColor(black)
+term.clear()
+if not term.isColor() or not pocket then term.setCursorPos(1, 1) error("Advanced Wireless Pocket Computer Required", 0) end
+drawElement(2, 2, 1, 1, white, nil, "Initializing . . .")
+if not os.getComputerLabel() then os.setComputerLabel("PocketPC.ID#" .. thisCC) end
+if peripheral.isPresent("back") and peripheral.getType("back") == "modem" and peripheral.call("back", "isWireless") then
+  rednet.open("back")
+  netSide = "back"
+else
+  term.clear()
+  drawElement(2, 2, 1, 1, red, nil, "No wireless")
+  drawElement(2, 3, 1, 1, nil, nil, "modem detected!")
+  drawElement(2, 5, 1, 1, nil, nil, "gtRemote REQUIRES")
+  drawElement(2, 6, 1, 1, nil, nil, "a wireless modem.")
+  term.setCursorPos(1, 9)
+  return
+end
+runState = "List"
+drawElement(2, 4, 1, 1, white, nil, "Searching for hosts . . .")
+netSend("ALL", "gtrQRY", "Full")
+pollTimer = os.startTimer(5)
+term.clear()
+drawCLI()
+parallel.waitForAny(userInput, netReceive, dataPoller)

@@ -1,0 +1,177 @@
+--[[ 
+Program created by Frekvens1
+
+1. Any live cell with two or three neighbors survives.
+2. Any dead cell with three live neighbors becomes a live cell.
+3. All other live cells die in the next generation. Similarly, all other dead cells stay dead.
+
+https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life
+
+pastebin get si4sDXrY GameOfLife.lua
+--]]
+local mon = peripheral.find("monitor")
+mon.setTextScale(0.5)
+
+local grid1 = {
+	-- Medium exploder (Variant)
+	[10] = {[10] = true,[11] = true},[11] = {[10] = true,[11] = true},[13] = {[10] = true,[11] = true,[12] = true},
+	-- Small exploder (Variant)
+	[50] = {[10] = true,[11] = true},[51] = {[10] = true,[11] = true},[53] = {[11] = true},[54] = {[11] = true},[55] = {[11] = true}
+}
+
+local grid2 = {
+	-- Gosper Glider Gun
+	[10] = { [10] = true, [11] = true },[11] = { [10] = true, [11] = true },
+	[18] = { [11] = true, [12] = true },[19] = { [10] = true, [12] = true },[20] = { [10] = true, [11] = true },
+	[26] = { [12] = true, [13] = true, [14] = true },[27] = { [12] = true },[28] = { [13] = true },
+	[32] = { [10] = true, [9] = true },[33] = { [10] = true, [8] = true },[34] = { [8] = true, [9] = true, [20] = true, [21] = true },
+	[35] = { [20] = true, [22] = true },[36] = { [20] = true },[44] = { [8] = true, [9] = true },
+	[45] = { [8] = true, [9] = true, [15] = true, [16] = true, [17] = true },[46] = { [15] = true},[47] = { [16] = true},
+}
+
+local grid = grid1 -- Change this to either grid1 / grid2 for examples
+local dead_cells = {}
+local new_cells = {}
+
+function draw(redraw)
+	if redraw then
+		mon.setBackgroundColor(colors.black)
+		mon.clear()
+		
+		mon.setBackgroundColor(colors.white)
+		for x in pairs(grid) do
+			for y in pairs(grid[x]) do
+				mon.setCursorPos(x*2, y)
+				mon.write("  ") -- Draws all cells from scratch (Intensive)
+			end
+		end
+	else -- Fast render
+		mon.setBackgroundColor(colors.black)
+		for x in pairs(dead_cells) do
+			for y in pairs(dead_cells[x]) do
+				mon.setCursorPos(x*2, y)
+				mon.write("  ") -- Removes dead cells
+			end
+		end
+		
+		mon.setBackgroundColor(colors.white)
+		for x in pairs(new_cells) do
+			for y in pairs(new_cells[x]) do
+				mon.setCursorPos(x*2, y)
+				mon.write("  ") -- Adds new cells
+			end
+		end
+	end
+	
+	mon.setBackgroundColor(colors.black)
+end
+
+
+function nextGeneration() -- Moves the simulation one more step
+	dead_cells = {}
+	new_cells = {}
+	local x_axis_pending_delete = {}
+	
+	for x in pairs(grid) do
+		local y_elements = 0
+		for y in pairs(grid[x]) do
+		
+			y_elements = y_elements + 1
+			-- Calculate if alive cell should stay alive
+			alive_cells = calculateCell(x, y)
+			if not(alive_cells == 2 or alive_cells == 3) then
+				if dead_cells[x] == nil then dead_cells[x] = {} end
+				if dead_cells[x][y] == nil then dead_cells[x][y] = true end
+			end
+
+			-- Look for nearby cells to be reborn
+			local cells = {
+				{ x+1, y },
+				{ x-1, y },
+				{ x, y+1 },
+				{ x, y-1 },
+
+				{ x+1, y+1 },
+				{ x+1, y-1 },
+				{ x-1, y+1 },
+				{ x-1, y-1 }
+			}
+
+			for _, cell in pairs(cells) do
+				if not(cellAlive(cell[1], cell[2])) then
+					if (calculateCell(cell[1], cell[2]) == 3) then
+						if (new_cells[cell[1]] == nil) then new_cells[cell[1]] = {} end
+						if (new_cells[cell[1]][cell[2]] == nil) then new_cells[cell[1]][cell[2]] = true end
+					end
+				end
+			end
+		end
+		
+		if y_elements == 0 then -- X table is empty, why keep it?
+			table.insert(x_axis_pending_delete, x)
+		end
+	end
+		
+	for x in pairs(dead_cells) do
+		for y in pairs(dead_cells[x]) do
+			grid[x][y] = nil -- Remove the dead cells from the grid
+		end
+	end
+	
+	for _, x in pairs(x_axis_pending_delete) do
+		grid[x] = nil
+	end
+
+	for x in pairs(new_cells) do
+		for y in pairs(new_cells[x]) do
+			if (grid[x] == nil) then grid[x] = {} end
+			if (grid[x][y] == nil) then grid[x][y] = true end -- Add the new cells to the grid
+		end
+	end
+end
+
+
+function calculateCell(x, y) -- Returns the number of living cells around a cell
+	local cells_alive = 0
+
+	local cells = { 
+		{ x+1, y },
+		{ x-1, y },
+		{ x, y+1 },
+		{ x, y-1 },
+
+		{ x+1, y+1 },
+		{ x+1, y-1 },
+		{ x-1, y+1 },
+		{ x-1, y-1 }
+	}
+
+	for _, cell in pairs(cells) do
+		if (cellAlive(cell[1], cell[2])) then
+			cells_alive = cells_alive + 1
+		end
+	end
+	
+	return cells_alive
+
+end
+
+
+function cellAlive(x, y) -- Checks if the cell exists within the grid
+	if grid[x] == nil then return false end
+	if grid[x][y] == nil then return false end
+	return true
+end
+
+
+local function yield() -- Replace 'os.sleep(0)' with this for super speed
+	os.queueEvent( "sleep" )
+	coroutine.yield( "sleep" )
+end
+
+draw(true) -- Draw whole grid
+while true do
+	os.sleep(0)
+	nextGeneration()
+	draw(false) -- Fast rendering
+end

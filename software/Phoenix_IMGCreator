@@ -1,0 +1,2170 @@
+local arg = {...}
+
+local text = function(string,xPos,yPos)
+	term.setCursorPos(xPos,yPos)
+	term.write(string)
+end
+
+local running = true
+
+local modules = {}
+local mainPath = shell.getRunningProgram()
+local accent_color = colors.red
+
+local cur_layer = 0
+local layers = {}
+local image = {}
+
+local main_menu = {"Layers", "Chars"}
+
+local scrX, scrY = term.getSize()
+local centerX, centerY = math.floor(scrX/2), math.floor(scrY/2)
+local background = colors.black
+local brushColor = 1
+local textColor = 1
+local charSet = " "
+local sX, sY = 1, 1
+local sizeX, sizeY = 1,0
+local startXSize, startYSize = 24, 12
+local posX, posY = centerX-math.floor(sizeX/2)+3, centerY-math.floor(sizeY/2)+1
+local obj = {}
+local layer = 1
+local select = false
+local showBar = true
+local saver = false
+local resizer = false
+local opener = false
+local charer = false
+local layerer = false
+local saveAs = ""
+local tool = "B"
+local fileType = "png"
+local empty_symbol = "+" --string.char(153)
+local newX = sizeX
+local newY = sizeY
+local splash = {
+	'e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8',
+	'e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8',
+	'e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8',
+	'e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8',
+	'e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8',
+	'e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8',
+	' eep0eh0eo0ee0en0ei0ex0e ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee eev0ee0er0e 0e20e.0e00e 0e',
+	' e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8',
+	' e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8',
+	' e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8 e8',
+}
+
+local Colors = {
+	[1] = "0",
+	[2] = "1",
+	[4] = "2",
+	[8] = "3",
+	[16] = "4",
+	[32] = "5",
+	[64] = "6",
+	[128] = "7",
+	[256] = "8",
+	[512] = "9",
+	[1024] = "a",
+	[2048] = "b",
+	[4096] = "c",
+	[8192] = "d",
+	[16384] = "e",
+	[32768] = "f",
+}
+local ColorsB = {
+	["0"] = 1,
+	["1"] = 2,
+	["2"] = 4,
+	["3"] = 8,
+	["4"] = 16,
+	["5"] = 32,
+	["6"] = 64,
+	["7"] = 128,
+	["8"] = 256,
+	["9"] = 512,
+	["a"] = 1024,
+	["b"] = 2048,
+	["c"] = 4096,
+	["d"] = 8192,
+	["e"] = 16384,
+	["f"] = 32768,
+}
+
+local clear = function()
+	term.setBackgroundColor(background)
+	term.clear()
+	term.setCursorPos(1,1)
+end
+
+local function newObj(name,x,y,sizeX,sizeY)
+	obj[name] = {x1 = x, y1 = y, x2 = x+sizeX-1, y2 = y+sizeY-1}
+end
+
+local function moveObj(name,x,y)
+	obj[name] = {x1 = x, y1 = y}
+	obj[name].x2 = obj[name].x1+x
+	obj[name].y2 = obj[name].y2+y
+end
+
+local function checkObj(name,x,y)
+	if x>=obj[name].x1 and x<=obj[name].x2 and y>=obj[name].y1 and y<=obj[name].y2 then
+		return true
+	end
+end
+
+clear(background)
+
+local shadow = window.create(term.current(),posX+1,posY+1,sizeX,sizeY)
+shadow.setBackgroundColor(colors.black)
+shadow.setTextColor(colors.gray)
+shadow.clear()
+for i=1,sizeX-1 do
+	shadow.setCursorPos(i,sizeY)
+	shadow.write(string.char(131))
+end
+for i=1,sizeY-1 do
+	shadow.setCursorPos(sizeX,i)
+	shadow.write(string.char(149))
+end
+shadow.setCursorPos(sizeX,sizeY)
+shadow.write(string.char(129))
+
+local blackBackground = window.create(term.current(),posX,posY,sizeX+1,sizeY+1)
+
+local holst = window.create(term.current(),posX,posY,sizeX,sizeY)
+holst.setBackgroundColor(colors.white)
+holst.setTextColor(colors.lightGray)
+holst.clear()
+local function clear_holst()
+	holst.setBackgroundColor(colors.white)
+	holst.setTextColor(colors.lightGray)
+	holst.clear()
+	for i=1,sizeX do
+		for j=1,sizeY do
+			holst.setCursorPos(i,j)
+			holst.write(empty_symbol)
+		end
+	end
+end
+clear_holst()
+
+local layer_bar = window.create(term.current(),scrX+1,1,8,scrY)
+layer_bar.setBackgroundColor(colors.gray)
+layer_bar.setTextColor(colors.lightGray)
+layer_bar.clear()
+layer_bar.setCursorPos(2,2)
+layer_bar.write("Layers")
+layer_bar.setCursorPos(2,4)
+layer_bar.write(string.char(17).." 1")
+layer_bar.setCursorPos(7,4)
+layer_bar.write(string.char(16))
+layer_bar.setCursorPos(2,scrY)
+layer_bar.setTextColor(colors.red)
+layer_bar.write("Remove")
+layer_bar.setTextColor(accent_color)
+layer_bar.setCursorPos(2,6)
+layer_bar.write("Visible")
+layer_bar.setTextColor(colors.lightGray)
+
+local bar = window.create(term.current(),1,1,3,scrY)
+bar.setBackgroundColor(colors.lightGray)
+bar.clear()
+
+local bar_color = window.create(term.current(),-4,1,4,scrY)
+bar_color.setBackgroundColor(colors.gray)
+bar_color.clear()
+for i=0,15 do
+	bar_color.setCursorPos(2,i+2)
+	bar_color.setBackgroundColor(2^i)
+	bar_color.write("  ")
+end
+bar_color.setBackgroundColor(colors.gray)
+bar_color.setTextColor(colors.lightGray)
+bar_color.setCursorPos(2,18)
+bar_color.write("--")
+bar_color.setBackgroundColor(brushColor)
+bar_color.setTextColor(textColor)
+bar_color.setCursorPos(2,19)
+bar_color.write(charSet)
+bar_color.setBackgroundColor(textColor)
+bar_color.setCursorPos(3,19)
+bar_color.write(" ")
+
+local bar_resize = window.create(term.current(),centerX-13,-9,26,9)
+bar_resize.setBackgroundColor(colors.gray)
+bar_resize.clear()
+bar_resize.setTextColor(colors.lightGray)
+bar_resize.setCursorPos(2,4)
+bar_resize.write("New X")
+bar_resize.setCursorPos(2,6)
+bar_resize.write("New Y")
+bar_resize.setCursorPos(12,2)
+bar_resize.write("Size")
+bar_resize.setCursorPos(2,8)
+bar_resize.write("cancel")
+bar_resize.setBackgroundColor(colors.lightGray)
+bar_resize.setTextColor(colors.gray)
+bar_resize.setCursorPos(8,4)
+bar_resize.write("                  ")
+bar_resize.setCursorPos(9,4)
+bar_resize.write(newX)
+bar_resize.setCursorPos(8,6)
+bar_resize.write("                  ")
+bar_resize.setCursorPos(9,6)
+bar_resize.write(newY)
+bar_resize.setCursorPos(18,8)
+bar_resize.write(" resize ")
+newObj("btn_resize_",centerX+5,8,8,1)
+
+local color_selector = window.create(bar_color,1,2,1,1)
+color_selector.setBackgroundColor(colors.gray)
+color_selector.clear()
+color_selector.setTextColor(accent_color)
+color_selector.write(string.char(149))
+
+local color_selectorT = window.create(bar_color,4,2,1,1)
+color_selectorT.setBackgroundColor(accent_color)
+color_selectorT.clear()
+color_selectorT.setTextColor(colors.gray)
+color_selectorT.write(string.char(149))
+
+bar.setTextColor(colors.gray)
+bar.setCursorPos(1,1)
+bar.write(string.char(17))
+bar.setCursorPos(2,2)
+bar.write("B")
+newObj("B",1,2,3,1)
+bar.setCursorPos(2,4)
+bar.write("E")
+newObj("E",1,4,3,1)
+bar.setCursorPos(2,6)
+bar.write("F")
+newObj("F",1,6,3,1)
+bar.setCursorPos(2,8)
+bar.write("M")
+newObj("M",1,8,3,1)
+
+bar.setCursorPos(2,9)
+bar.write("_")
+
+bar.setCursorPos(2,11)
+bar.write("C")
+newObj("btn_color",1,11,3,1)
+
+bar.setCursorPos(2,13)
+bar.write("S")
+newObj("btn_resize",1,13,3,1)
+
+bar.setCursorPos(2,15)
+bar.write(string.char(24))
+bar.setCursorPos(2,16)
+bar.write(string.char(173))
+newObj("btn_open",1,15,3,1)
+
+bar.setCursorPos(2,17)
+bar.write(string.char(25))
+newObj("btn_save",1,17,3,1)
+
+bar.setTextColor(colors.red)
+bar.setCursorPos(2,scrY)
+bar.write("x")
+newObj("btn_exit",1,scrY,3,1)
+
+local selector = window.create(term.current(),1,2,1,1)
+selector.setBackgroundColor(colors.lightGray)
+selector.clear()
+selector.setTextColor(accent_color)
+selector.write(string.char(149))
+
+local save_bar = window.create(term.current(),centerX-13,-12,26,12)
+save_bar.setBackgroundColor(colors.gray)
+save_bar.clear()
+save_bar.setTextColor(colors.lightGray)
+save_bar.setCursorPos(11,2)
+save_bar.write("Save As")
+save_bar.setCursorPos(2,11)
+save_bar.write("cancel")
+save_bar.setBackgroundColor(colors.lightGray)
+save_bar.setCursorPos(1,4)
+save_bar.write("                                          ")
+save_bar.setCursorPos(1,5)
+save_bar.write("                                          ")
+save_bar.setCursorPos(1,6)
+save_bar.write("                                          ")
+save_bar.setTextColor(colors.gray)
+save_bar.setCursorPos(2,5)
+if saveAs ~= "" then
+	save_bar.write(saveAs)
+else
+	save_bar.write("Path:")
+end
+save_bar.setCursorPos(20,11)
+save_bar.write(" save ")
+local function drawType()
+	save_bar.setCursorPos(2,9)
+	if fileType == "png" then
+		save_bar.setBackgroundColor(accent_color)
+	end
+	save_bar.write(" png ")
+	save_bar.setBackgroundColor(colors.lightGray)
+	save_bar.setCursorPos(8,9)
+	if fileType == "skch" then
+		save_bar.setBackgroundColor(accent_color)
+	end
+	save_bar.write(" skch ")
+	save_bar.setBackgroundColor(colors.lightGray)
+	save_bar.setCursorPos(15,9)
+	if fileType == "nft" then
+		save_bar.setBackgroundColor(accent_color)
+	end
+	save_bar.write(" nft ")
+	save_bar.setBackgroundColor(colors.lightGray)
+	save_bar.setCursorPos(21,9)
+	if fileType == "nfp" then
+		save_bar.setBackgroundColor(accent_color)
+	end
+	save_bar.write(" nfp ")
+	save_bar.setBackgroundColor(colors.lightGray)
+end
+drawType()
+newObj("btn_png",centerX-11,8,5,3)
+newObj("btn_skch",centerX-5,8,6,3)
+newObj("btn_nft",centerX+2,8,5,3)
+newObj("btn_nfp",centerX+8,8,5,3)
+newObj("btn_save_",centerX+7,11,6,1)
+
+local open_bar = window.create(term.current(),centerX-13,-9,26,9)
+open_bar.setBackgroundColor(colors.gray)
+open_bar.clear()
+open_bar.setTextColor(colors.lightGray)
+open_bar.setCursorPos(12,2)
+open_bar.write("Open")
+open_bar.setCursorPos(2,8)
+open_bar.write("cancel")
+open_bar.setBackgroundColor(colors.lightGray)
+open_bar.setCursorPos(1,4)
+open_bar.write("                                          ")
+open_bar.setCursorPos(1,5)
+open_bar.write("                                          ")
+open_bar.setCursorPos(1,6)
+open_bar.write("                                          ")
+open_bar.setTextColor(colors.gray)
+open_bar.setCursorPos(2,5)
+open_bar.write("Path:")
+open_bar.setCursorPos(20,8)
+open_bar.write(" open ")
+newObj("btn_open_",centerX+7,8,6,1)
+
+local charPicker = window.create(term.current(),scrX+1,1,18,scrY)
+charPicker.setBackgroundColor(colors.gray)
+charPicker.setTextColor(colors.lightGray)
+charPicker.clear()
+charPicker.setCursorPos(4,1)
+charPicker.write("char picker")
+local function drawPicker()
+	charPicker.setCursorPos(2,3)
+	for i=1,255 do
+		if i%16 == 0 then
+			charPicker.setCursorPos(2,i/16+3)
+		end
+		if string.char(i) == charSet then
+			charPicker.setTextColor(accent_color)
+		else
+			charPicker.setTextColor(colors.lightGray)
+		end
+		charPicker.write(string.char(i))
+	end
+end
+drawPicker()
+
+local rule_top = window.create(term.current(),4,1,scrX-3,1)
+rule_top.setBackgroundColor(colors.lightGray)
+rule_top.clear()
+for i=1,scrX-4 do
+	rule_top.setTextColor(colors.gray)
+	rule_top.setCursorPos(i,1)
+	rule_top.write(string.char(149))
+end
+rule_top.setCursorPos(scrX-3,1)
+rule_top.write(string.char(17))
+
+local rule_right = window.create(term.current(),scrX,2,1,scrY-1)
+rule_right.setBackgroundColor(colors.lightGray)
+for i=1,scrY-1 do
+	rule_right.setTextColor(colors.gray)
+	rule_right.setCursorPos(1,i)
+	rule_right.write(string.char(131))
+end
+
+local function redraw_gui()
+	term.clear()
+	blackBackground.redraw()
+	shadow.redraw()
+	holst.redraw()
+	rule_top.redraw()
+	rule_right.redraw()
+	bar_color.redraw()
+	--sel.redraw()
+	bar.redraw()
+	selector.redraw()
+	open_bar.redraw()
+	save_bar.redraw()
+	bar_resize.redraw()
+	charPicker.redraw()
+	layer_bar.redraw()
+end
+
+local function open_context_menu(...)
+	local args = {...}
+	local waitFor = true
+	local selected
+	local reverse
+	if type(args[#args]) == 'boolean' then
+		reverse = args[#args]
+		args[#args] = nil
+	end
+	if type(args[#args]) == 'table' then
+		waitFor = false
+		selected = args[#args][1]
+		args[#args] = nil
+	end
+	local x = args[1]
+	local y = args[2]
+	local maxLenth = 3
+	local output = nil
+	for i=3,#args do
+		if #args[i] > maxLenth then
+			maxLenth = #args[i]
+		end
+	end
+	maxLenth = maxLenth + 1
+	local xend = maxLenth+1
+	local yend = #args
+	if x+maxLenth > scrX or reverse then
+		-- xend = x
+		x = x-maxLenth
+	end
+	if y+#args > scrY then
+		-- yend = y
+		y = y-#args+1
+	end
+
+	local trm = window.create(term.current(), x,y,xend,yend)
+	if reverse then
+		trm.setBackgroundColor(colors.lightGray)
+	else
+		trm.setBackgroundColor(colors.gray)
+	end
+	trm.setTextColor(colors.white)
+	trm.clear()
+
+	local usualText = function(string,xPos,yPos)
+		trm.setCursorPos(xPos,yPos)
+		trm.write(string)
+	end
+
+	for i=3,#args do
+		if selected == args[i] then
+			trm.setBackgroundColor(colors.lightGray)
+			for k=1,maxLenth+1 do
+				usualText(" ",k,i-1)
+			end
+		end
+		usualText(args[i], math.floor((maxLenth-1)/2)-math.floor(#args[i]/2)+2, i-1)
+		if selected == args[i] then
+			trm.setBackgroundColor(colors.gray)
+		end
+	end
+
+	local event, side, xp, yp
+	while waitFor do
+		event, side, xp, yp = os.pullEvent()
+		if event == 'mouse_click' then
+			for i=1,#args-2 do
+				if xp >= x and xp <= x+xend-1 and yp >= y and yp <= y+yend-1 then
+					if yp == y+i then
+						trm.setTextColor(accent_color)
+						usualText(args[i+2],math.floor((maxLenth-1)/2)-math.floor(#args[i+2]/2)+2,i+1)
+						sleep(0.1)
+						output = args[i+2]
+					end
+				end
+			end
+			return output
+		end
+	end
+	return x-1
+end
+
+local function open_main_menu()
+	local out = open_context_menu(scrX, 1, unpack(main_menu))
+	redraw_gui()
+	return out
+end
+
+local function open_submenu(title, ...)
+	local args = {...}
+	local posY
+	for i=1,#main_menu do
+		if main_menu[i] == title then
+			posY = i + 1
+			break
+		end
+	end
+	if not posY then return end
+	-- local menu_arr = main_menu
+	table.insert(main_menu, {title})
+	local posX = open_context_menu(scrX, 1, unpack(main_menu))
+	table.remove(main_menu)
+	-- sleep(1)
+	if posX then
+		table.insert(args, true)
+		local out = open_context_menu(posX, posY-1, unpack(args))
+		return out
+	end
+end
+
+local function newLayer()
+	cur_layer = #image+1
+	image[cur_layer] = {}
+	layers[cur_layer] = {}
+	layers[cur_layer].visible = true
+	layers[cur_layer].pos = {x = 1, y = 1}
+	for i=1,sizeY do
+		if not image[cur_layer][i] then
+			image[cur_layer][i] = {}
+		end
+		for j=1,sizeX do
+			image[cur_layer][i][j] = "###"
+		end
+	end
+	layer_bar.setCursorPos(5,4)
+	layer_bar.write(" ")
+	layer_bar.setCursorPos(4,4)
+	layer_bar.write(cur_layer)
+end
+
+local function redraw_layers(pos, x,y)
+	if not pos then
+		pos = 1
+		if not (x and y) then
+			clear_holst()
+		end
+	end
+	for l=pos,#image do
+		if image[l] and layers[l] and layers[l].visible then
+			if not x or not y then
+				for i=1,#image[l] do
+					for j=1,#image[l][i] do
+						local str = image[l][i][j]
+						if str ~= "###" then
+							holst.setCursorPos(j, i)
+							holst.setTextColor(ColorsB[string.sub(str,2,2)])
+							holst.setBackgroundColor(ColorsB[string.sub(str,3)])
+							holst.write(string.sub(str,1,1))
+						elseif l==1 then
+							holst.setCursorPos(j, i)
+							holst.setTextColor(colors.lightGray)
+							holst.setBackgroundColor(colors.white)
+							holst.write(empty_symbol)
+						end
+					end
+				end
+			else
+				if image[l][y] and image[l][y][x] then
+					local str = image[l][y][x]
+					if str ~= "###" then
+						holst.setCursorPos(x, y)
+						holst.setTextColor(ColorsB[string.sub(str,2,2)])
+						holst.setBackgroundColor(ColorsB[string.sub(str,3)])
+						holst.write(string.sub(str,1,1))
+					elseif l==1 then
+						holst.setCursorPos(x, y)
+						holst.setTextColor(colors.lightGray)
+						holst.setBackgroundColor(colors.white)
+						holst.write(empty_symbol)
+					end
+				end
+			end
+		end
+	end
+	-- redraw_gui()
+	-- redraw_holst()
+end
+
+local function change_layer(num)
+	if num <= #image and num >= 1 then
+		cur_layer = num
+	elseif num < 1 then
+		cur_layer = 1
+	elseif num > #image then
+		newLayer()
+	end
+	if not layers[num] or not layers[num].visible then
+		layer_bar.setTextColor(colors.lightGray)
+	else
+		layer_bar.setTextColor(accent_color)
+	end
+	layer_bar.setCursorPos(2,6)
+	layer_bar.write("Visible")
+	layer_bar.setTextColor(colors.lightGray)
+	layer_bar.setCursorPos(5,4)
+	layer_bar.write(" ")
+	layer_bar.setCursorPos(4,4)
+	layer_bar.write(cur_layer)
+	redraw_layers()
+end
+
+local function remove_layer(num)
+	if num > 1 and num <= #image then
+		for i=num,#image-1 do
+			image[i] = image[i+1]
+			layers[i] = layers[i+1]
+		end
+		layers[#image] = nil
+		image[#image] = nil
+		redraw_layers()
+		change_layer(num-1)
+	elseif num == 1 and #image == 1 then
+		image[1] = nil
+		cur_layer = 0
+		newLayer()
+	end
+end
+
+local function change_visible(num)
+	if num >= 1 and num <= #image then
+		if layers[num] and layers[num].visible then
+			layers[num].visible = false
+			layer_bar.setTextColor(colors.lightGray)
+		else
+			layers[num].visible = true
+			layer_bar.setTextColor(accent_color)
+		end
+		layer_bar.setCursorPos(2,6)
+		layer_bar.write("Visible")
+		layer_bar.setTextColor(colors.lightGray)
+		redraw_layers()
+	end
+end
+
+local function check_visible(num)
+	if not num then num = cur_layer end
+	if layers[num] and layers[num].visible then
+		return true
+	else
+		return false
+	end
+end
+
+--newLayer()
+
+local function redraw_holst()
+	local posX, posY = holst.getPosition()
+	if posX < 5 then
+		bar.redraw()
+		selector.redraw()
+	end
+	if posY < 3 and showBar then
+		rule_top.redraw()
+	end
+	if 2 + posX + shadow.getSize() > scrX and showBar then
+		rule_right.redraw()
+	end
+end
+
+local function fill(x,y, color)
+	local function fill_(x,y, color)
+		if color == nil then
+			color = "#"
+		end
+		local function next(i)
+			if image[cur_layer][i] and image[cur_layer][i][x+1] and string.sub(image[cur_layer][i][x+1],3) == color and string.sub(image[cur_layer][i][x+1],3) ~= Colors[brushColor] then
+				fill_(x+1,i,color)
+			end
+			if image[cur_layer][i] and image[cur_layer][i][x-1] and string.sub(image[cur_layer][i][x-1],3) == color and string.sub(image[cur_layer][i][x-1],3) ~= Colors[brushColor] then
+				fill_(x-1,i,color)
+			end
+		end
+		local function vertical(x,y)
+			local i = y
+			local top, down
+			while image[cur_layer][i] and image[cur_layer][i][x] and string.sub(image[cur_layer][i][x],3) == color do
+				image[cur_layer][i][x] = charSet..Colors[textColor]..Colors[brushColor]
+				i = i-1
+			end
+			top = i+1
+			i = y+1
+			while image[cur_layer][i] and image[cur_layer][i][x] and string.sub(image[cur_layer][i][x],3) == color do
+				image[cur_layer][i][x] = charSet..Colors[textColor]..Colors[brushColor]
+				i = i+1
+			end
+			down = i-1
+			next(top)
+			next(down)
+		end
+		vertical(x,y)
+		next(y)
+	end
+	fill_(x,y,color)
+	redraw_layers(cur_layer)
+	redraw_holst()
+end
+
+local function checkHolstClick(x,y)
+	local bx, by
+	bx, by = x-posX+1-math.floor(sX/2),y-math.floor(sY/2)-posY+1
+
+	if check_visible() and image[cur_layer][by] and image[cur_layer][by][bx] then
+		return bx, by
+	end
+end
+
+local function draw_pixel(x,y,absolute)
+	local bx, by
+	if not absolute then
+		bx, by = x-posX+1-math.floor(sX/2),y-math.floor(sY/2)-posY+1
+	else
+		bx, by = x, y
+	end
+	if check_visible() and image[cur_layer][by] and image[cur_layer][by][bx] and (image[cur_layer][by][bx] == "###" or string.sub(image[cur_layer][by][bx],3) ~= Colors[brushColor] or string.sub(image[cur_layer][by][bx],2,2) ~= Colors[textColor] or string.sub(image[cur_layer][by][bx],1,1) ~= charSet) then
+		image[cur_layer][by][bx] = charSet..(type(textColor) == "number" and Colors[textColor] or textColor)..(type(brushColor) == "number" and Colors[brushColor] or brushColor)
+		redraw_layers(cur_layer, bx,by)
+		-- bar.redraw()
+		-- selector.redraw()
+		-- rule_top.redraw()
+		-- rule_right.redraw()
+		redraw_holst()
+	end
+end
+
+local function erase_pixel(x,y,absolute)
+	local bx, by
+	if not absolute then
+		bx, by = x-posX+1-math.floor(sX/2),y-math.floor(sY/2)-posY+1
+	else
+		bx, by = x, y
+	end
+	if check_visible() and image[cur_layer][by] and image[cur_layer][by][bx] and image[cur_layer][by][bx] ~= "###" then
+		image[cur_layer][by][bx] = '###'
+		redraw_layers(nil, bx,by)
+		-- bar.redraw()
+		-- selector.redraw()
+		-- rule_top.redraw()
+		-- rule_right.redraw()
+		redraw_holst()
+	end
+end
+
+local function reposition_layer(x, y)
+	-- local x, y = x-posX+1, y-posY+1
+
+	local newImg = {}
+	local startI = 1
+	local startJ = 1
+	local offset
+
+	layers[cur_layer].pos.x = layers[cur_layer].pos.x+x
+	layers[cur_layer].pos.y = layers[cur_layer].pos.y+y
+
+	if layers[cur_layer].pos.x > 0 then
+		layers[cur_layer].pos.x = 0
+	end
+	if layers[cur_layer].pos.y > 0 then
+		layers[cur_layer].pos.y = 0
+	end
+
+	if startI > layers[cur_layer].pos.y then
+		startI = layers[cur_layer].pos.y
+	end
+
+	if startJ > layers[cur_layer].pos.x then
+		startJ = layers[cur_layer].pos.x
+	end
+
+	for i=startI, #image[cur_layer] do
+		if image[cur_layer][i] then
+			if not newImg[i+y] then
+				newImg[i+y] = {}
+			end
+			for j=startJ, #image[cur_layer][i] do
+				newImg[i+y][j+x] = image[cur_layer][i][j]
+				image[cur_layer][i][j] = "###"
+			end
+		end
+	end
+
+	for i=1, #image[cur_layer] do
+		if not newImg[i] then
+			newImg[i] = {}
+		end
+		for j=1, #image[cur_layer][i] do
+			if not newImg[i][j] then
+				if not image[cur_layer][i][j] then
+					image[cur_layer][i][j] = "###"
+				end
+				newImg[i][j] = image[cur_layer][i][j]
+			end
+		end
+	end
+
+	image[cur_layer] = newImg
+
+	redraw_layers()
+	-- bar.redraw()
+	-- selector.redraw()
+	-- rule_top.redraw()
+	-- rule_right.redraw()
+	redraw_holst()
+end
+
+local function change_color(clr,side)
+	local sel = color_selector
+	if not side or side == "brush" then
+		brushColor = clr
+	else
+		textColor = clr
+		sel = color_selectorT
+	end
+
+	bar_color.setBackgroundColor(brushColor)
+	bar_color.setTextColor(textColor)
+	bar_color.setCursorPos(2,19)
+	if not charSet then
+		charSet = " "
+	end
+	bar_color.write(charSet)
+	bar_color.setBackgroundColor(textColor)
+	bar_color.setCursorPos(3,19)
+	bar_color.write(" ")
+
+	local xx,xy = sel.getPosition()
+	while 2^(xy-2) ~= clr do
+		bar_color.setBackgroundColor(colors.gray)
+		bar_color.setCursorPos(xx,xy)
+		bar_color.write(" ")
+		if 2^(xy-2) > clr then
+			xy = xy-1
+		else
+			xy = xy+1
+		end
+		sel.reposition(xx,xy)
+		sleep(0)
+	end
+end
+
+local function pick_color(x,y,mode,absolute)
+	local bx, by
+	if not absolute then
+		bx, by = x-posX+1-math.floor(sX/2),y-math.floor(sY/2)-posY+1
+	else
+		bx, by = x, y
+	end
+	local mode = mode or "brush"
+	local color
+	if check_visible() and image[cur_layer][by] and image[cur_layer][by][bx] and image[cur_layer][by][bx] ~= "###" and (image[cur_layer][by][bx] == "###" or string.sub(image[cur_layer][by][bx],3) ~= Colors[brushColor] or string.sub(image[cur_layer][by][bx],2,2) ~= Colors[textColor] or string.sub(image[cur_layer][by][bx],1,1) ~= charSet) then
+		if mode == "brush" then
+			color = ColorsB[string.sub(image[cur_layer][by][bx],3,3)]
+		else
+			if string.sub(image[cur_layer][by][bx],1,1) ~= " " and string.sub(image[cur_layer][by][bx],1,1) ~= "" then
+				color = ColorsB[string.sub(image[cur_layer][by][bx],2,2)]
+			else
+				color = ColorsB[string.sub(image[cur_layer][by][bx],3,3)]
+			end
+		end
+		change_color(color,mode)
+		return color
+	end
+end
+
+local function resize(x,y)
+	term.setCursorPos(1,1)
+	local bx, by = sizeX, sizeY
+	x = tonumber(x)
+	y = tonumber(y)
+	sizeX, sizeY = x, y
+	newX, newY = x, y
+	bar_resize.setBackgroundColor(colors.lightGray)
+	bar_resize.setTextColor(colors.gray)
+	bar_resize.setCursorPos(8,4)
+	bar_resize.write("                  ")
+	bar_resize.setCursorPos(9,4)
+	bar_resize.write(newX)
+	bar_resize.setCursorPos(8,6)
+	bar_resize.write("                  ")
+	bar_resize.setCursorPos(9,6)
+	bar_resize.write(newY)
+	posX, posY = centerX-math.floor(sizeX/2)+3, centerY-math.floor(sizeY/2)+1
+
+	blackBackground.reposition(posX, posY, sizeX+1, sizeY+1)
+	shadow.reposition(posX+1, posY+1, sizeX, sizeY)
+	shadow.clear()
+	for i=1,sizeX-1 do
+		shadow.setCursorPos(i,sizeY)
+		shadow.write(string.char(131))
+	end
+	for i=1,sizeY-1 do
+		shadow.setCursorPos(sizeX,i)
+		shadow.write(string.char(149))
+	end
+	shadow.setCursorPos(sizeX,sizeY)
+	shadow.write(string.char(129))
+	holst.reposition(posX, posY, sizeX, sizeY)
+
+	for l=1,#image do
+		if not image[l] then
+			image[l] = {}
+		end
+		for i=1,sizeY do
+			if not image[l][i] then
+				image[l][i] = {}
+			end
+			for j=1,sizeX do
+				if not image[l][i][j] then
+					image[l][i][j] = "###"
+				end
+			end
+		end
+	end
+	term.setCursorPos(1,1)
+	redraw_layers()
+end
+
+local function save(path, fileType)
+	path = shell.resolve(path)
+	local img = {}
+	for l=1,#image do
+		for i=1,#image[l] do
+			if not img[i] then
+				img[i] = {}
+			end
+			for j=1,#image[l][i] do
+				if not (img[i][j] and img[i][j] ~= "###" and image[l][i][j] == "###") then
+					img[i][j] = image[l][i][j]
+				end
+				if not img[i][j] then
+					img[i][j] = "###"
+				end
+			end
+		end
+	end
+	if fileType == "png" then
+		local file = fs.open(path.."."..fileType,"w")
+		for i=1,#img do
+			if not img[i] then
+				img[i] = {}
+			end
+			local line = ""
+			for j=1,#img[i] do
+				if not img[i][j] then
+					line = line.."###"
+				else
+					line = line..img[i][j]
+				end
+			end
+			file.writeLine(line)
+		end
+		file.close()
+	elseif fileType == "skch" then
+		local file = fs.open(path.."."..fileType,"w")
+		local lr = {}
+		for l=1,#image do
+			local arr = {}
+			arr.Visible = true
+			arr.Index = l
+			arr.Name = "layer#"..l
+			arr.BackgroundColour = -1
+			arr.Pixels = {}
+			for i=1,#image[l] do
+				local line = "\030 \031f"
+				local back = "#"
+				local backT = "f"
+				for j=1,#image[l][i] do
+					if string.sub(image[l][i][j],3) == back and string.sub(image[l][i][j],2,2) == backT and string.sub(image[l][i][j],1,1) ~= "#" then
+						line = line..string.sub(image[l][i][j],1,1)
+					elseif string.sub(image[l][i][j],3) == back and string.sub(image[l][i][j],1,1) == "#" then
+						line = line.." "
+					elseif not image[l][i][j] or image[l][i][j] == "###" then
+						back = "#"
+						backT = "f"
+						local s = " "
+						if i >= #image[l]-1 then
+							s = ""
+						end
+						line = line..string.char(30).." "..string.char(31)..backT..s
+					else
+						if string.sub(image[l][i][j],3) ~= back then
+							back = string.sub(image[l][i][j],3)
+							line = line..string.char(30)..back
+						end
+						if string.sub(image[l][i][j],2,2) ~= backT then
+							backT = string.sub(image[l][i][j],2,2)
+							line = line..string.char(31)..backT
+						end
+						line = line..string.sub(image[l][i][j],1,1)
+					end
+				end
+				arr.Pixels[i] = line
+			end
+			lr[l] = arr
+		end
+		file.write(textutils.serialize(lr))
+		file.close()
+	elseif fileType == "nft" then
+		local file = fs.open(path.."."..fileType,"w")
+		for i=1,#img do
+			local line = " f"
+			local back = "#"
+			local backT = "f"
+			local bcount = 0
+			for j=1,#img[i] do
+				if string.sub(img[i][j],3) == back and string.sub(img[i][j],2,2) == backT and string.sub(img[i][j],1,1) ~= "#" then
+					line = line..string.sub(img[i][j],1,1)
+				elseif string.sub(img[i][j],3) == back and string.sub(img[i][j],1,1) == "#" then
+					line = line.." "
+				elseif not img[i][j] or img[i][j] == "###" then
+					back = "#"
+					backT = "f"
+					local s = " "
+					if i >= #img-1 then
+						s = ""
+					end
+					line = line..string.char(30).." "..string.char(31)..backT..s
+				else
+					if string.sub(img[i][j],3) ~= back then
+						back = string.sub(img[i][j],3)
+						line = line..string.char(30)..back
+					end
+					if string.sub(img[i][j],2,2) ~= backT then
+						backT = string.sub(img[i][j],2,2)
+						line = line..string.char(31)..backT
+					end
+					line = line..string.sub(img[i][j],1,1)
+				end
+			end
+			file.writeLine(line)
+		end
+		file.close()
+	elseif fileType == "nfp" then
+		local file = fs.open(path.."."..fileType,"w")
+		for i=1,#img do
+			local line = ""
+			for j=1,#img[i] do
+				if img[i][j] == "###" then
+					line = line.." "
+				else
+					line = line..string.sub(img[i][j],3)
+				end
+			end
+			file.writeLine(line)
+		end
+		file.close()
+	end
+end
+
+local function getFileFormat(path)
+	local name = fs.getName(path)
+	local starting,ending = string.find(name,"(.)%.[%d%w]*$")
+	if starting == nil then
+		return nil
+	else
+		return string.sub(name,starting+2,-1), string.sub(name,1,starting)
+	end
+end
+
+local function draw(trm,img,x,y)
+	for i=1,#img do
+		for j=1,#img[i]/3 do
+			if string.sub(img[i],j*3-2,j*3) ~= "###" then
+				trm.setCursorPos(j,i)
+				trm.setTextColor(ColorsB[string.sub(img[i],j*3-1,j*3-1)])
+				trm.setBackgroundColor(ColorsB[string.sub(img[i],j*3,j*3)])
+				trm.write(string.sub(img[i],j*3-2,j*3-2))
+			end
+		end
+	end
+end
+
+local function open(pth)
+	local path = shell.resolve(pth)
+	if not fs.exists(path) then return end
+
+	term.clear()
+	term.setCursorPos(1,1)
+	blackBackground.setVisible(false)
+	holst.setVisible(false)
+	shadow.setVisible(false)
+	local loadScreen = window.create(term.current(),centerX-14,centerY-7,32,16)
+	loadScreen.setBackgroundColor(colors.gray)
+	loadScreen.setTextColor(colors.lightGray)
+	loadScreen.clear()
+	draw(loadScreen,splash,1,1)
+	loadScreen.setBackgroundColor(colors.gray)
+	loadScreen.setTextColor(colors.lightGray)
+	loadScreen.setCursorPos(2,12)
+	loadScreen.write("Loading...")
+	loadScreen.setCursorPos(2,13)
+	loadScreen.write("Finding file        ")
+	sleep(0.5)
+
+	loadScreen.setCursorPos(2,15)
+	loadScreen.write(path)
+
+	local file = fs.open(path,"r")
+
+	loadScreen.setCursorPos(2,13)
+	loadScreen.write("Getting file format ")
+	sleep(0.5)
+
+	fileType = getFileFormat(pth)
+	saveAs = string.sub(pth,1,#pth-#fileType-1)
+
+	if file then
+		local load = true
+		loadScreen.setCursorPos(2,13)
+		loadScreen.write("Reading file       ")
+		sleep(0.5)
+------------------------------------------------------------------
+		if fileType == "png" then
+			newLayer()
+			local line = file.readLine()
+			local i=1
+			while line do
+				if #line/3 > sizeX then
+					resize(#line/3,sizeY)
+				end
+				if not image[cur_layer] then
+					image[cur_layer] = {}
+				end
+				for j=1,#line/3 do
+					if not image[cur_layer][i] then
+						image[cur_layer][i] = {}
+					end
+					image[cur_layer][i][j] = string.sub(line,j*3-2,j*3)
+				end
+				line = file.readLine()
+				if line then
+					i=i+1
+					if i > sizeY then
+						resize(sizeX,i)
+					end
+				end
+			end
+			redraw_layers(cur_layer)
+-------------------------------------------------------------------------------
+		elseif fileType == "skch" then
+			local las = textutils.unserialize(file.readAll())
+
+			for l=1,#las do
+				newLayer()
+				if las[l].Visible then
+					layers[cur_layer].setVisible(false)
+				end
+
+					for i=1, #las[l].Pixels do
+						local j=5
+						local char = ""
+						local px = 0
+						local line = las[l].Pixels[i]
+
+						if i > sizeY then
+							resize(sizeX,i)
+						end
+
+						local _bColor = string.sub(line,2,2)
+						local _tColor = string.sub(line,4,4)
+						local bColor = _bColor
+						local tColor = _tColor
+
+						if not image[cur_layer][i] then
+							image[cur_layer][i] = {}
+						end
+
+						while j<=#line do
+							char = string.sub(line,j,j)
+							if char == "" then
+								j=j+1
+								bColor = string.sub(line,j,j)
+								if bColor ~= " " then
+								else
+									bColor = _bColor
+								end
+								j=j+1
+							elseif char == "" then
+								j=j+1
+								tColor = string.sub(line,j,j)
+								if tColor ~= " " then
+								else
+									tColor = _tColor
+								end
+								j=j+1
+							else
+								px = px + 1
+								if px > sizeX then
+									resize(px,sizeY)
+								end
+								if bColor ~= " " then
+									image[cur_layer][i][px] = char..tColor..bColor
+								end
+								j = j+1
+							end
+						end
+					end
+			end
+--------------------------------------------------------------
+		elseif fileType == "nft" then
+			newLayer()
+			local line = file.readLine()
+			local i=1
+			while line do
+				local j=5
+				local char = ""
+				local px = 0
+
+				local _bColor = string.sub(line,2,2)
+				local _tColor = string.sub(line,4,4)
+				local bColor = _bColor
+				local tColor = _tColor
+
+				if not image[cur_layer][i] then
+					image[cur_layer][i] = {}
+				end
+
+				while j<=#line do
+					char = string.sub(line,j,j)
+					if char == "" then
+						j=j+1
+						bColor = string.sub(line,j,j)
+						if bColor ~= " " then
+						else
+							bColor = _bColor
+						end
+						j=j+1
+					elseif char == "" then
+						j=j+1
+						tColor = string.sub(line,j,j)
+						if tColor ~= " " then
+						else
+							tColor = _tColor
+						end
+						j=j+1
+					else
+						px = px + 1
+						if px > sizeX then
+							resize(px,sizeY)
+						end
+						if bColor ~= " " then
+							image[cur_layer][i][px] = char..tColor..bColor
+						end
+						j = j+1
+					end
+				end
+				line = file.readLine()
+				if line then
+					i=i+1
+					if i > sizeY then
+						resize(sizeX,i)
+					end
+				end
+			end
+-----------------------------------------------------------------
+		elseif fileType == "nfp" then
+			newLayer()
+			local line = file.readLine()
+			local i=1
+			while line do
+				if not image[cur_layer][i] then
+					image[cur_layer][i] = {}
+				end
+				if #line > sizeX then
+					resize(#line,sizeY)
+				end
+				for j=1,#line do
+					if string.sub(line,j,j) ~= " " then
+						image[cur_layer][i][j] = " "..string.sub(line,j,j)..string.sub(line,j,j)
+					else
+						image[cur_layer][i][j] = "###"
+					end
+				end
+				line = file.readLine()
+				if line then
+					i=i+1
+					if i > sizeY then
+						resize(sizeX,i)
+					end
+				end
+			end
+---------------------------------------------------------------------
+		elseif fileType == "phm" then
+			term.clear()
+			loadScreen.redraw()
+			loadScreen.setCursorPos(2,13)
+			loadScreen.write("Loading module...     ")
+			local mdl_name = file.readLine()
+			if string.sub(mdl_name,1,2) == "--" then
+				mdl_name = string.sub(mdl_name,3)
+			else
+				mdl_name = saveAs
+			end
+			local find = false
+			for i=1,#modules do
+				if modules[i].name == mdl_name and modules[i].path == pth then
+					for j=i,#modules-1 do
+						modules[j] = modules[j+1]
+					end
+					modules[#modules] = nil
+					find = true
+					break
+				elseif modules[i].name == mdl_name and modules[i].path ~= pth then
+					modules[i].path = pth
+					find = true
+					break
+				elseif modules[i].name ~= mdl_name and modules[i].path == pth then
+					modules[i].name = name
+					find = true
+					break
+				end
+			end
+			if not find then
+				modules[#modules+1] = {}
+				modules[#modules].name = mdl_name
+				modules[#modules].path = pth
+			end
+			for i=1,#modules do
+				if modules[i].prg then
+					modules[i].prg = nil
+				end
+			end
+			local md = fs.open(shell.resolve("modules.cfg"),"w")
+			md.write(textutils.serialize(modules))
+			md.close()
+			sleep(0.5)
+			running = false
+		else
+			term.clear()
+			loadScreen.redraw()
+			loadScreen.setCursorPos(2,13)
+			loadScreen.write("Unknown format        ")
+			load = false
+			sleep(0.5)
+		end
+		if load then
+			term.clear()
+			loadScreen.redraw()
+			loadScreen.setCursorPos(2,13)
+			loadScreen.write("Comlete             ")
+			drawType()
+			saveAs = ""
+			redraw_layers()
+			sleep(0.5)
+		end
+		file.close()
+	else
+		term.clear()
+		loadScreen.redraw()
+		loadScreen.setCursorPos(2,13)
+		loadScreen.write("File not found        ")
+		sleep(0.5)
+	end
+	term.clear()
+	blackBackground.setVisible(true)
+	shadow.setVisible(true)
+	shadow.redraw()
+	holst.setVisible(true)
+	holst.redraw()
+	bar.redraw()
+	rule_top.redraw()
+	rule_right.redraw()
+	selector.redraw()
+end
+
+local function open_save_window()
+	saver = true
+	bar.setTextColor(accent_color)
+	bar.setCursorPos(2,17)
+	bar.write(string.char(25))
+	local _sx, _sy = save_bar.getSize()
+	for i=-_sy/2,1 do
+		save_bar.reposition(centerX-12,i*2-1)
+		sleep(0)
+	end
+end
+
+local function open_open_window()
+	opener = true
+	bar.setTextColor(accent_color)
+	bar.setCursorPos(2,15)
+	bar.write(string.char(24))
+	local _sx, _sy = open_bar.getSize()
+	for i=-_sy/2,1 do
+		open_bar.reposition(centerX-12,i*2)
+		sleep(0)
+	end
+end
+
+local function open_resize_window()
+	resizer = true
+	bar.setTextColor(accent_color)
+	bar.setCursorPos(2,13)
+	bar.write("S")
+	local _sx, _sy = bar_resize.getSize()
+	for i=-_sy/2,1 do
+		bar_resize.reposition(centerX-12,i*2)
+		sleep(0)
+	end
+end
+
+
+--------------------------Setting up environment----------------------------
+	local env = {
+		holst = holst,
+		holst_shadow = shadow,
+		image = image,
+		get_accent_color = function()
+			return accent_color
+		end,
+		set_accent_color = function(color)
+			accent_color = color
+		end,
+		change_tool = function(tl)
+			local xx,xy = selector.getPosition()
+			local y
+			if tl == "B" then
+				y = 2
+			elseif tl == "E" then
+				y = 4
+			elseif tl == "F" then
+				y = 6
+			elseif tl == "M" then
+				y = 8
+			elseif tl == "C" then
+				y = 11
+			end
+			if y then
+				while xy ~= y do
+					if xy > y then
+						xy = xy-1
+					else
+						xy = xy+1
+					end
+					bar.redraw()
+					selector.reposition(1,xy)
+					sleep(0)
+				end
+				tool = tl
+			end
+		end,
+		get_tool = function()
+			return tool
+		end,
+		get_fullscreen_state = function()
+			if showBar then
+				return false
+			else
+				return true
+			end
+		end,
+		shadow = shadow,
+		rule_top = rule_top,
+		rule_right = rule_right,
+		toolbar = bar,
+		save_window = save_bar,
+		open_window = open_bar,
+		selector = selector,
+		open_save_window = open_save_window,
+		close_save_window = function()
+			saver = false
+			bar.setTextColor(colors.gray)
+			bar.setCursorPos(2,17)
+			bar.write(string.char(25))
+			local _sx, _sy = save_bar.getSize()
+			for i=-_sy/2,1 do
+				term.clear()
+				shadow.redraw()
+				holst.redraw()
+				bar.redraw()
+				rule_top.redraw()
+				rule_right.redraw()
+				selector.redraw()
+				save_bar.reposition(centerX-12,-(_sy+i*2+1))
+				sleep(0)
+			end
+		end,
+		open_open_window = open_open_window,
+		close_open_window = function()
+			opener = false
+			bar.setTextColor(colors.gray)
+			bar.setCursorPos(2,15)
+			bar.write(string.char(24))
+			local _sx, _sy = open_bar.getSize()
+			for i=-_sy/2,1 do
+				term.clear()
+				shadow.redraw()
+				holst.redraw()
+				bar.redraw()
+				rule_top.redraw()
+				rule_right.redraw()
+				selector.redraw()
+				open_bar.reposition(centerX-12,-(_sy+i*2+1))
+				sleep(0)
+			end
+		end,
+		open_resize_window = open_resize_window,
+		close_resize_window = function()
+			resizer = false
+			bar.setTextColor(colors.gray)
+			bar.setCursorPos(2,13)
+			bar.write("S")
+			local _sx, _sy = open_bar.getSize()
+			for i=-_sy/2,1 do
+				term.clear()
+				shadow.redraw()
+				holst.redraw()
+				bar.redraw()
+				rule_top.redraw()
+				rule_right.redraw()
+				selector.redraw()
+				bar_resize.reposition(centerX-12,-(_sy+i*2+1))
+				sleep(0)
+			end
+		end,
+		open_layers_menu = function()
+			layerer = true
+			local _sx, _sy = layer_bar.getSize()
+			for i = 1,_sx/2 do
+				layer_bar.reposition(scrX-i*2+1,1)
+				sleep(0)
+			end
+		end,
+		open_charPicker = function()
+			charer = true
+			local _sx, _sy = charPicker.getSize()
+			for i = 0,_sx/3 do
+				charPicker.reposition(scrX-i*3+1,1)
+				sleep(0)
+			end
+		end,
+		open_context_menu = open_context_menu,
+		open_main_menu = open_main_menu,
+		open_submenu = open_submenu,
+		add_item_to_main_menu = function(item)
+			main_menu[#main_menu+1] = item
+		end,
+		draw_pixel = draw_pixel,
+		erase_pixel = erase_pixel,
+		redraw_gui = redraw_gui,
+		xSize = scrX,
+		ySize = scrY,
+		resize = resize,
+		get_image_pos = function()
+			return posX,posY
+		end,
+		get_image_size = function()
+			return sizeX, sizeY
+		end,
+		can_draw = function()
+			if not charer and not saver and not resizer and not opener and not select and not layerer then
+				return true
+			else
+				return false
+			end
+		end,
+		check_mouse_on_holst = checkHolstClick,
+		set_color = change_color,
+		get_colors = function(hex)
+			if hex then
+				return textColor, brushColor
+			else
+				return ColorsB[textColor], ColorsB[brushColor]
+			end
+		end,
+		set_char = function(nchar)
+			charSet = nchar
+		end,
+		pick_color = pick_color,
+		change_layer = change_layer,
+		redraw_layers = redraw_layers,
+		get_current_layer = function()
+			return cur_layer
+		end,
+		get_current_layer_image = function()
+			if image[cur_layer] and layers[cur_layer] and layers[cur_layer].visible then
+				return image[cur_layer]
+			end
+		end,
+		save = save,
+		open = open,
+		get_file_name = function()
+			return saveAs
+		end,
+		set_file_name = function(name)
+			saveAs = name
+		end,
+		get_file_type = function()
+			return fileType
+		end,
+		set_file_type = function(_type)
+			fileType = _type
+		end,
+		get_empty_symbol = function()
+			return empty_symbol
+		end,
+		set_empty_symbol = function(symbol)
+			empty_symbol = symbol
+		end,
+		move_holst = function(posX,posY)
+			blackBackground.redraw()
+			blackBackground.reposition(posX,posY)
+			shadow.reposition(posX+1,posY+1)
+			holst.reposition(posX,posY)
+			redraw_holst()
+		end
+	}
+--------------------------------------------------------------------------------
+
+
+local function runPhoenix()
+	local px, py = 0,0
+	local gx, gy = posX, posY
+
+	local did_mod = nil
+	local stat = nil
+
+	for i=1,#modules do
+		local function runModule()
+			os.run(env,shell.resolve(modules[i].path))
+		end
+		modules[i].prg = coroutine.create(runModule)
+		coroutine.resume(modules[i].prg, "init")
+	end
+
+	local event, side, x, y
+	while running do
+		event, side, x, y = os.pullEvent()
+		term.setCursorPos(1,1)
+
+		for i=1,#modules do
+			if not modules[i].prg then
+				local function runModule()
+					os.run(env,shell.resolve(modules[i].path))
+				end
+				modules[i].prg = coroutine.create(runModule)
+			end
+			stat, did_mod = coroutine.resume(modules[i].prg, event, side, x, y)
+			if did_mod then
+				break
+			end
+		end
+
+		if not did_mod or (stat and type(did_mod) == "table") then
+			if event == "mouse_click" then
+				if showBar then
+					------------------------------------------------------------------------------------------
+					if saver then
+						if y>=4 and y<=6 and x >= centerX-12 and x <= centerX+13 then
+							local trm = term.redirect(save_bar)
+							term.setCursorPos(2,5)
+							term.write("                                          ")
+							term.setCursorPos(2,5)
+							saveAs = read()
+							term.redirect(trm)
+						elseif checkObj("btn_png",x,y) then
+							fileType = "png"
+							drawType()
+						elseif checkObj("btn_skch",x,y) then
+							fileType = "skch"
+							drawType()
+						elseif checkObj("btn_nft",x,y) then
+							fileType = "nft"
+							drawType()
+						elseif checkObj("btn_nfp",x,y) then
+							fileType = "nfp"
+							drawType()
+						elseif checkObj("btn_save_",x,y) and saveAs ~= "" then
+							save_bar.setBackgroundColor(accent_color)
+							save_bar.setCursorPos(20,11)
+							save_bar.write(" save ")
+							sleep(0)
+							env.save(saveAs,fileType)
+							sleep(0)
+							save_bar.setBackgroundColor(colors.lightGray)
+							save_bar.setCursorPos(20,11)
+							save_bar.write(" save ")
+							env.close_save_window()
+						else
+							env.close_save_window()
+						end
+					--------------------------------------------------------------------------------------------------
+					elseif resizer then
+						if not select and resizer and not saver and y==4 and x >= centerX-12 and x <= centerX+13 then
+							local trm = term.redirect(bar_resize)
+							term.setCursorPos(9,4)
+							term.write("                 ")
+							term.setCursorPos(9,4)
+							newX = read()
+							term.redirect(trm)
+						elseif not select and resizer and not saver and y==6 and x >= centerX-12 and x <= centerX+13 then
+							local trm = term.redirect(bar_resize)
+							term.setCursorPos(9,6)
+							term.write("                 ")
+							term.setCursorPos(9,6)
+							newY = read()
+							term.redirect(trm)
+						elseif not select and resizer and not saver and checkObj("btn_resize_",x,y) and newX ~= 0 and newY ~= 0 then
+							bar_resize.setBackgroundColor(accent_color)
+							bar_resize.setCursorPos(18,8)
+							bar_resize.write(" resize ")
+							sleep(0)
+							resize(newX,newY)
+							sleep(0)
+							bar_resize.setBackgroundColor(colors.lightGray)
+							bar_resize.setCursorPos(18,8)
+							bar_resize.write(" resize ")
+							env.close_resize_window()
+						elseif not select and resizer and not saver then
+							env.close_resize_window()
+						end
+					-------------------------------------------------------------------------------------
+					elseif opener then
+						if y>=4 and y<=6 and x >= centerX-12 and x <= centerX+13 then
+							local trm = term.redirect(open_bar)
+							term.setCursorPos(2,5)
+							term.write("                                          ")
+							term.setCursorPos(2,5)
+							saveAs = read()
+							term.redirect(trm)
+						elseif checkObj("btn_open_",x,y) and saveAs ~= "" then
+							open_bar.setBackgroundColor(accent_color)
+							open_bar.setCursorPos(20,8)
+							open_bar.write(" open ")
+							sleep(0.1)
+							open_bar.setBackgroundColor(colors.lightGray)
+							open_bar.setCursorPos(20,8)
+							open_bar.write(" open ")
+							env.close_open_window()
+							open(saveAs)
+							sleep(0)
+							open_bar.setBackgroundColor(colors.lightGray)
+							open_bar.setCursorPos(8,11)
+							open_bar.write(" open ")
+						else
+							env.close_open_window()
+						end
+					----------------------------------------------------------------------------------------
+					elseif charer then
+						if x >= scrX-16 and x <= scrX-1 and y >= 3 and y <= scrY-1 then
+							if y == 3 then
+								charSet = string.char(x - scrX+17)
+							else
+								charSet = string.char((x - scrX+17) + (16*(y-3)-1))
+							end
+							drawPicker()
+						else
+							charer = false
+							local _sx, _sy = charPicker.getSize()
+							for i = 0,_sx/3 do
+								term.clear()
+								shadow.redraw()
+								holst.redraw()
+								rule_top.redraw()
+								bar.redraw()
+								selector.redraw()
+								charPicker.reposition(scrX-17+i*3,1)
+								sleep(0)
+							end
+							rule_top.redraw()
+							rule_right.redraw()
+						end
+					elseif layerer then
+						if x >= scrX-7 then
+							if y==scrY then
+								env.remove_layer(cur_layer)
+							elseif y==4 then
+								if x <= scrX-5 then
+									env.change_layer(cur_layer-1)
+								elseif x>= scrX-2 then
+									env.change_layer(cur_layer+1)
+								end
+							elseif y== 6 then
+								change_visible(cur_layer)
+							else
+							end
+						else
+							layerer = false
+							local _sx, _sy = charPicker.getSize()
+							for i = 0,_sx/2 do
+								term.clear()
+								shadow.redraw()
+								holst.redraw()
+								rule_top.redraw()
+								bar.redraw()
+								selector.redraw()
+								layer_bar.reposition(scrX-7+i*2,1)
+								sleep(0)
+							end
+							rule_top.redraw()
+							rule_right.redraw()
+						end
+					----------------------------------------------------------------------------------------
+					else
+						if x<=3 and y==scrY then
+							term.clear()
+							term.setCursorPos(1,1)
+							break
+
+						elseif x == scrX and not select then
+							if side == 2 then
+								local out = env.open_main_menu()
+
+								if out == "Chars" then
+									env.open_charPicker()
+								elseif out == "Layers" then
+									env.open_layers_menu()
+								elseif out then
+									for i=1,#modules do
+										if modules[i].prg then
+											stat, did_mod = coroutine.resume(modules[i].prg, "main_menu_pressed", out)
+											if did_mod then
+												break
+											end
+										end
+									end
+								else
+									redraw_gui()
+								end
+							elseif side == 1 then
+								env.open_layers_menu()
+							end
+
+						elseif checkObj("btn_save",x,y) and not select then
+							open_save_window()
+						elseif checkObj("btn_resize",x,y) and not select then
+							open_resize_window()
+						elseif x==1 and y==1 and not select then
+							showBar = false
+							for i=-1,1 do
+								term.clear()
+								shadow.redraw()
+								holst.redraw()
+								bar.reposition(-i,1)
+								rule_top.reposition(4,-i)
+								rule_right.reposition(scrX+i+1,2)
+								selector.redraw()
+								sleep(0)
+							end
+						elseif checkObj("btn_color",x,y) and not select and side == 1 then
+							select = true
+							bar.setTextColor(accent_color)
+							bar.setCursorPos(2,11)
+							bar.write("C")
+							for i=1,4 do
+								bar_color.reposition(i,1)
+								bar.redraw()
+								selector.redraw()
+								sleep(0)
+							end
+						elseif checkObj("btn_color",x,y) and side == 2 then
+							local xx,xy = selector.getPosition()
+							while xy ~= y do
+								if xy > y then
+									xy = xy-1
+								else
+									xy = xy+1
+								end
+								bar.redraw()
+								selector.reposition(1,xy)
+								sleep(0)
+							end
+							tool = "C"
+						elseif checkObj("B",x,y) then
+							local xx,xy = selector.getPosition()
+							while xy ~= y do
+								if xy > y then
+									xy = xy-1
+								else
+									xy = xy+1
+								end
+								bar.redraw()
+								selector.reposition(1,xy)
+								sleep(0)
+							end
+							tool = "B"
+						elseif checkObj("E",x,y) then
+							local xx,xy = selector.getPosition()
+							while xy ~= y do
+								if xy > y then
+									xy = xy-1
+								else
+									xy = xy+1
+								end
+								bar.redraw()
+								selector.reposition(1,xy)
+								sleep(0)
+							end
+							tool = "E"
+						elseif checkObj("F",x,y) then
+							local xx,xy = selector.getPosition()
+							while xy ~= y do
+								if xy > y then
+									xy = xy-1
+								else
+									xy = xy+1
+								end
+								bar.redraw()
+								selector.reposition(1,xy)
+								sleep(0)
+							end
+							tool = "F"
+						elseif checkObj("M", x,y) then
+							local xx, xy = selector.getPosition()
+							while xy ~= y do
+								if xy > y then
+									xy = xy-1
+								else
+									xy = xy+1
+								end
+								bar.redraw()
+								selector.reposition(1,xy)
+								sleep(0)
+							end
+							tool = "M"
+						elseif checkObj("btn_open",x,y) and not select then
+							open_open_window()
+						elseif (tool == "B" or tool == "E" or tool == "C") and not select then
+							if tool == "B" and side == 1 then
+								draw_pixel(x,y)
+							elseif tool == "E" and side == 1 then
+								erase_pixel(x,y)
+							elseif tool == "C" then
+								if side == 1 then
+									env.pick_color(x,y,"brush")
+								elseif side == 2 then
+									env.pick_color(x,y,"char")
+								end
+							end
+						elseif tool == "F" and not select and side == 1 then
+							local bx, by = x-posX+1-math.floor(sX/2),y-math.floor(sY/2)-posY+1
+							if image[cur_layer][by] and image[cur_layer][by][bx] then
+								local color = string.sub(image[cur_layer][by][bx],3)
+								fill(bx,by,color)
+								-- bar.redraw()
+								-- selector.redraw()
+								-- rule_top.redraw()
+								-- rule_right.redraw()
+							end
+						elseif select then
+							if x>=4 and x<=7 and y>=2 and y<=17 then
+								local sel = color_selector
+								if side == 1 then
+									brushColor = 2^(y-2)
+								else
+									textColor = 2^(y-2)
+									sel = color_selectorT
+								end
+
+								bar_color.setBackgroundColor(brushColor)
+								bar_color.setTextColor(textColor)
+								bar_color.setCursorPos(2,19)
+								bar_color.write(charSet)
+								bar_color.setBackgroundColor(textColor)
+								bar_color.setCursorPos(3,19)
+								bar_color.write(" ")
+
+								local xx,xy = sel.getPosition()
+								while xy ~= y do
+									bar_color.setBackgroundColor(colors.gray)
+									bar_color.setCursorPos(xx,xy)
+									bar_color.write(" ")
+									if xy > y then
+										xy = xy-1
+									else
+										xy = xy+1
+									end
+									sel.reposition(xx,xy)
+									sleep(0)
+								end
+							else
+								select = false
+								bar.setTextColor(colors.gray)
+								bar.setCursorPos(2,11)
+								bar.write("C")
+								sleep(0)
+								for i=-4,4 do
+									term.clear()
+									shadow.redraw()
+									holst.redraw()
+									rule_top.redraw()
+									bar_color.reposition(-i,1)
+									bar.redraw()
+									rule_right.redraw()
+									selector.redraw()
+									sleep(0)
+								end
+							end
+						end
+					end
+				elseif not showBar then
+					if x==1 then
+						showBar = true
+						for i=-1,1 do
+							bar.reposition(i,1)
+							rule_top.reposition(4,i)
+							rule_right.reposition(scrX-i+1,2)
+							selector.redraw()
+							sleep(0)
+						end
+					elseif (tool == "B" or tool == "E") and side == 1 then
+						if tool == "B" then
+							draw_pixel(x,y)
+						elseif tool == "E" then
+							erase_pixel(x,y)
+						end
+					elseif tool == "F" and side == 1 then
+						local bx, by = x-posX+1-math.floor(sX/2),y-math.floor(sY/2)-posY+1
+						if image[cur_layer][by] and image[cur_layer][by][bx] then
+							local color = string.sub(image[cur_layer][by][bx],3)
+							fill(bx,by,color)
+							-- bar.redraw()
+							-- selector.redraw()
+							-- rule_top.redraw()
+							-- rule_right.redraw()
+						end
+					end
+				end
+				if side == 2 then
+					px, py = x, y
+					gx, gy = posX, posY
+				elseif side == 1 and tool == "M" then
+					px, py = x, y
+					gx, gy = layers[cur_layer].pos.x, layers[cur_layer].pos.y
+				end
+	----------------------------------------------------------------------------------------
+			elseif event == "mouse_drag" then
+				if not select and not resizer and not saver and not opener and side == 2 then
+					-- term.clear()
+					posX = gx - (px - x)
+					posY = gy - (py - y)
+
+					env.move_holst(posX, posY)
+				elseif (tool == "B" or tool == "E" or tool == "M") and x>=bar.getPosition()+3 and not select and not resizer and not saver and not opener and side == 1 then
+					if tool == "B" then
+						draw_pixel(x,y)
+					elseif tool == "E" then
+						erase_pixel(x,y)
+					elseif tool == "M" then
+						reposition_layer(-(px - x), -(py - y))
+						px, py = x, y
+					end
+				end
+			elseif event == "char" then
+				charSet = side
+				bar_color.setBackgroundColor(brushColor)
+				bar_color.setTextColor(textColor)
+				bar_color.setCursorPos(2,19)
+				bar_color.write(charSet)
+				bar_color.setBackgroundColor(textColor)
+				bar_color.setCursorPos(3,19)
+				bar_color.write(" ")
+			elseif event == "key" then
+				if tool == "M" and side == keys.up then
+					reposition_layer(0, -1)
+				elseif tool == "M" and side == keys.down then
+					reposition_layer(0, 1)
+				elseif tool == "M" and side == keys.left then
+					reposition_layer(-1, 0)
+				elseif tool == "M" and side == keys.right then
+					reposition_layer(1, 0)
+				end
+			end
+		end
+	end
+	term.clear()
+	term.setCursorPos(1,1)
+end
+
+term.setCursorPos(1,1)
+
+if arg[1] == "--open" or arg[1] == "-o" then
+	if fs.exists(shell.resolve("modules.cfg")) then
+		local file = fs.open(shell.resolve("modules.cfg"),"r")
+		modules = textutils.unserialize(file.readAll())
+		file.close()
+	end
+	open(arg[2])
+
+	runPhoenix()
+elseif arg[1] == "--get-modules" or arg[1] == "-m" then
+	term.setBackgroundColor(colors.black)
+	term.setTextColor(colors.white)
+	term.clear()
+	print(" Phoenix: Active modules")
+
+	local file = fs.open(shell.resolve("modules.cfg"),"r")
+	local modules
+	if file then
+		modules = textutils.unserialize(file.readAll())
+	end
+	file.close()
+
+	for i=1,#modules do
+		print("")
+		term.setTextColor(colors.orange)
+		write(" - "..modules[i].name..": ")
+		term.setTextColor(colors.white)
+		print(modules[i].path)
+	end
+	print("")
+elseif arg[1] == "--help" or arg[1] == "-h" then
+	term.setBackgroundColor(colors.black)
+	term.setTextColor(colors.white)
+	term.clear()
+	print(" Phoenix:")
+	print("")
+	print(" --open <path> - open file")
+	print(" --get-modules - list of active modules")
+	print(" --help - show this message")
+	print("")
+else
+	term.clear()
+	term.setCursorPos(1,1)
+	local loadScreen = window.create(term.current(),centerX-14,centerY-7,32,16)
+	loadScreen.setBackgroundColor(colors.gray)
+	loadScreen.setTextColor(colors.lightGray)
+	loadScreen.clear()
+	draw(loadScreen,splash,1,1)
+	loadScreen.setBackgroundColor(colors.gray)
+	loadScreen.setTextColor(colors.lightGray)
+	loadScreen.setCursorPos(2,12)
+	loadScreen.write("Loading...")
+-------------------------------------------Load Modules--------------------------
+	if fs.exists(shell.resolve("modules.cfg")) then
+		local file = fs.open(shell.resolve("modules.cfg"),"r")
+		modules = textutils.unserialize(file.readAll())
+		file.close()
+		for i=1,#modules do
+			loadScreen.setCursorPos(2,14)
+			loadScreen.write("                               ")
+			loadScreen.setCursorPos(2,14)
+			loadScreen.write("Loading module: "..modules[i].name)
+			sleep(0.5)
+		end
+	end
+	newLayer()
+	loadScreen.setCursorPos(2,14)
+	loadScreen.write("                               ")
+	loadScreen.setCursorPos(2,14)
+	loadScreen.write("Creating new image")
+	sleep(0.5)
+	term.clear()
+	resize(startXSize, startYSize)
+	shadow.redraw()
+	holst.redraw()
+	bar.redraw()
+	rule_top.redraw()
+	rule_right.redraw()
+	selector.redraw()
+
+	runPhoenix()
+end

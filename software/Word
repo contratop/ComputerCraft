@@ -1,0 +1,2162 @@
+--[[
+	WYSIwrite
+	A WYSIWYG text editor for printing documents in ComputerCraft
+
+	Written by: Nitrogen Fingers
+]]--
+doc = {}
+
+--The width and height of the screen
+local w,h = term.getSize()
+--Whether or not the program is still running
+local finished = false
+
+--The length allowed for an individual line
+local linelen = 25
+--The lines allowed for an individual page
+local pagelen = 21
+
+--The currently viewed page
+local currpage = 1
+--The currently edited line
+local currline = 1
+--The currently index of the line edit
+local currind = 1
+
+--The amount of scrolling applied to the page on the Y.
+local yscroll = 0
+--The drawing offset
+local _xoff,_yoff = math.floor(w/2 - linelen/2),4
+--Whether or not a scroll or page change has occurred
+local lscroll = true
+--Whether or not the player is currently in a drop down menu
+local inDropDown = false
+
+--Whether or not whitespace characters are displayed
+local whitespaceVis = false
+--Whether or not a change has been made to the document since last save
+local sChange = false
+--The path currently being used to save to
+local sPath = nil
+--The file's name
+local sName = nil
+
+--The default directory for the write backup; this can be changed if you don't like it
+local bPath = "/.writebackup"
+--The backup timer, and its default length
+local bTimer, bLength = nil, 5
+
+--Alignment options, and a global test variable
+local ALIGNLEFT, ALIGNCENTER, ALIGNRIGHT = 0,1,2
+local testAlign = ALIGNLEFT
+
+--The list of all possible actions
+local ACTIONS = {
+	ADDCHAR = 0;
+	DELETECHAR = 1;
+	ADDBREAK = 2;
+}
+--The list of all actions performed. They contain:
+	--page,line,index as the location of the event
+	--type from the ACTIONS table
+	--value is the character or characters that were added/removed
+local undolist = {}
+local redolist = {}
+--The timer that determines which 'actions' are clumped together with undo and redo
+local actionTimer = nil
+--How many seconds of inactivity before the action is classified as separate by undo
+local actionDelay = 0.5
+
+--Menu Bindings, initialized at bottom of program
+
+local _printers = { name = "Print" }
+local _iChoices = { name = "Insert" }
+local _aChoices = { name = "Align" }
+local _mChoices = { name = "File", x = 2, y = 1 }
+local _eChoices = { name = "Edit", x = 4 + #_mChoices.name, y = 1 }
+	
+--For me
+local testMode = false
+local _tro = false
+local _suppress = false
+
+--For my testing purposes.
+function testPrint(_str)
+	if testMode then
+		if term.getCursorPos() ~= 1 then term.setCursorPos(1,1) end
+		term.setBackgroundColour(colours.white)
+		term.setTextColour(colours.red)
+		if not _suppress then print(_str) end
+		lscroll = true
+		_tro = true
+	end
+end
+function testWait()
+	if testMode and _tro then os.pullEvent("key") end
+	_tro = false
+end
+function testSuppress() _suppress = true end
+function testRelax() _suppress = false end
+
+--Returns whether or not a token is considered a newline for printing and pagination purposes
+function nl(str) return str == "\n" or str == string.char(17) end
+
+--I'm getting a lot of mileage out of this split function		
+function split(str, pattern)
+  local t = { }
+  local fpat = "(.-)" .. pattern
+  local last_end = 1
+  local s, e, cap = str:find(fpat, 1)
+  while s do
+    if s ~= 1 or cap ~= "" then
+      table.insert(t,cap)
+    end
+    last_end = e+1
+    s, e, cap = str:find(fpat, last_end)
+  end
+  if last_end <= #str then
+    cap = str:sub(last_end)
+    table.insert(t, cap)
+  end
+  return t
+end
+
+--Returns whether or not the given string is break terminated.
+local function hasBreakEnd(_line)
+	return _line and _line:find("[\n\f]") ~= nil
+end
+
+
+--[[ Gets the previous file in the path, if there is one ]]--
+local function getPreviousDir(_path)
+	if _path == "" or _path == "/" then return path
+	else
+		_path = _path:reverse()
+		return _path:sub(_path:find("/.*")+1):reverse()
+	end
+end
+
+--[[ Constructs an empty document that can be edited. Empty documents contain a 
+	 single page, with one line that cannot be deleted.
+	 Parameters: none
+	 Returns: none
+]]--
+local function constructNewDocument(_sName, _sPath)
+	--pages
+	doc = {
+		--lines
+		{
+			""
+		}
+	}
+	currpage = 1
+	currline = 1
+	currind = 1
+	paginateOverflow()
+	sPath = _sPath
+	sName = _sName
+	sChange = false
+end
+
+--[[ Constructs a document from an existing source
+     Parameters: none
+	 Returns: none
+]]--
+local function loadDocument(_path)
+	doc = {
+		{ }
+	}
+	assert(fs.exists(_path), _path)
+	local _file = fs.open(_path, "r")
+	local _line = _file.readLine()
+	while _line do
+		--Form feed check
+		_lineEndIndex = 1
+		while true do
+			local _fco = _line:find("\f", _lineEndIndex)
+			if not _fco then break end
+			if #doc[#doc] < pagelen then
+				if _lineEndIndex == 1 then
+					table.insert(doc[#doc], _line:sub(_lineEndIndex, _fco))
+				else
+					doc[#doc][#doc[#doc]] = _line:sub(_lineEndIndex, _fco)
+				end
+			else
+				table.insert(doc, { _line:sub(_lineEndIndex, _fco)})
+			end
+			_lineEndIndex = _fco + 1
+			currpage = #doc
+			currline = #doc[#doc]
+			paginateOverflow()
+		end
+		--Rest of line
+		if #doc[#doc] < pagelen then
+			if _lineEndIndex == 1 then
+				table.insert(doc[#doc], _line:sub(_lineEndIndex).."\n")
+			else
+				--Replacing the empty strings added by the paginator on form feeds.
+				doc[#doc][#doc[#doc]] = _line:sub(_lineEndIndex).."\n"
+			end
+		else
+			table.insert(doc, { _line:sub(_lineEndIndex).."\n" })
+		end
+		currpage = #doc
+		currline = #doc[#doc]
+		paginateOverflow()
+		
+		_line = _file.readLine()
+		if not _line then
+			local _od = doc[#doc][#doc[#doc]]
+			doc[#doc][#doc[#doc]] = _od:sub(1,#_od-1)
+		end
+	end
+	_file:close()
+	if not doc[1][1] then doc[1][1] = "" end
+	currpage = 1
+	currline = 1
+	currind = 1
+	sChange = false
+end
+
+--[[ "Depaginates" the current document into straight lines and saves the
+	 output to a file location for standard viewing
+	Parameters: _spath:string= the location to save the file
+	Returns: none
+]]--
+local function saveDocument(_path)
+	if not _path then _path = sPath end
+	local _lines = { "" }
+	
+	local _opi,_oli = currpage, currline
+	currpage = 1
+	currline = 0
+	while nextLine() do
+		local _cline = doc[currpage][currline]
+		if _cline:sub(#_cline) == "\n" then
+			_lines[#_lines] = _lines[#_lines].._cline:sub(1,#_cline-1)
+			table.insert(_lines, "")
+		else
+			_lines[#_lines] = _lines[#_lines].._cline
+		end
+	end
+	--Remove that empty 'newline' we include
+	if _lines[#_lines] == "" then table.remove(_lines, #_lines) end
+	local _file = fs.open(_path, "w")
+	for i=1,#_lines do 
+		_l = _lines[i]
+		_file.writeLine(_l) 
+	end
+	_file.close()
+	currpage, currline = _opi, _oli
+	if _path ~= bPath then sChange = false end
+	testWait()
+end
+
+--A quick function to let the program know there have been changes to the file
+local function setUpdated()
+	sChange = true
+	bTimer = os.startTimer(bLength)
+end
+
+--[[ Updates the document scroll to match the movement of the cursor.
+	 Parameters: none
+	 Returns: none
+]]--
+local function checkYScroll()
+	if yscroll + currline + _yoff > h - 3 then
+		yscroll = h - 3 - currline - _yoff
+		lscroll = true
+	elseif yscroll + currline + _yoff < 3 then
+		yscroll = 3 - currline - _yoff
+		lscroll = true
+	end
+end
+
+--[[ Returns the current amount of whitespace added to the front of the line
+	 (in addition to spaces etc.) as required by the alignment of the paragraph.
+	Params: _pagenum = the page number being printed
+			_linenum = the linenum being printed
+	Returns:int = the number of additional spaces from the left before the line starts
+]]--
+function getWhitespaceLength(_pagenum, _linenum)
+	local _page = doc[_pagenum]
+	_line = _page[_linenum]:gsub("[\n\f]", "")
+	if testAlign == ALIGNRIGHT then 
+		return linelen-#_line
+	elseif testAlign == ALIGNCENTER then
+		return math.floor(linelen/2) - math.floor(#_line/2)
+	else
+		return 0
+	end
+end
+
+--[[ Lowers the current line by 1, if possible
+	 Parameters: int:bookean = whether or not to include null lines
+	 Returns: true if there is a next line; false otherwise
+]]--
+function nextLine(_inc)
+	--Lines are checked if we are below the pagelen and not on the last page
+	if (_inc and (currline < pagelen and currpage < #doc) or (currline < #doc[currpage] 
+			and currpage == #doc)) or (not _inc and currline < #doc[currpage]) then 
+		currline = currline + 1
+	elseif currpage < #doc then 
+		currpage = currpage + 1
+		currline = 1
+	else 
+		return false 
+	end
+	return true
+end
+
+--[[ Ensures the cursor is in a valid position. Being outside the size of
+	 a string or before a forbidden character like a newline or tab are fixed.
+	 Parameters: none
+	 Returns: none
+]]--
+local function fixCursorPos()
+	if not doc[currpage] then
+		currpage = #doc
+		currline = #doc[#doc]
+	end
+	if not doc[currpage][currline] then
+		if currline > pagelen then 
+			currline = pagelen
+		else 
+			--I don't know if this often occurs...
+			currline = #doc[currpage] 
+		end
+		currind = #doc[currpage][currline] + 1
+	end
+	if currind < 1 then currind = 1
+	elseif currind > #doc[currpage][currline] + 1 then
+		currind = #doc[currpage][currline] + 1
+	end
+	if currind > #doc[currpage][currline] and hasBreakEnd(doc[currpage][currline]) then
+		currind = currind - 1
+	end
+end
+
+--[[ Goes to the previous line, if possible
+	 Parameters: none
+	 Returns: true if there is a previous line; false otherwise
+]]--
+local function lastLine()
+	if currline > 1 then
+		currline = currline - 1
+	elseif currpage > 1 then
+		currpage = currpage - 1
+		currline = pagelen
+	else return false end
+	return true
+end
+
+--[[ Gets the previous line in the document to the one provided
+	 Parameters: _page: the page in question (default to currpage)
+				 _line: the line in question (default to currline)
+	 Returns: string=The previous line, or nil if on the first line
+]]--
+local function getPrevLine(_page, _line)
+	if not _page or not _line then _page = currpage _line = currline end
+	if _page == 1 and _line == 1 then return nil
+	elseif _line == 1 then _page = _page - 1 _line = #doc[_page] 
+	else _line = _line - 1 end
+	return doc[_page][_line]
+end
+
+--[[ Gets the next line in the document to the one provided
+	 Parameters: _page: the page in question (default to currpage)
+				 _line: the line in question (default to currline)
+	 Returns: string=The next line, or nil if on the last line
+]]--
+local function getNextLine(_page, _line)
+	if not _page or not _line then _page = currpage _line = currline end
+	if _page == #doc and _line == #doc[#doc] then return nil
+	elseif _line == #doc[_page] then _line = 1 _page = _page + 1
+	else _line = _line + 1 end
+	return doc[_page][_line]
+end
+
+--[[ A helper that returns whether or not the input line is the last in the
+	 document (the last line has a few special rules associated with it)
+	 Parameters: _page: the page in question (default to currpage)
+				 _line: the line in question (default to currline)
+	 Returns: true if the last line in document; false otherwise
+]]--
+local function isLastLine(_page, _line)	
+	if not _page or not _line then _page = currpage _line = currline end
+	return _page == #doc and _line == #doc[#doc]
+end
+
+--[[Inserts a character to function as a line break. These can be any form of
+	character which should end the line and disallow further edits past it.
+	By current implementation, the break is inserted at the point of the cursor.
+	Params: _sym:character = the kind of break to insert. Currently, \n and 
+				\f are supported.
+]]--
+function insertLineBreak(_sym)
+	--First we put whatever follows the cursor in a carry buffer
+	local _cbuff = doc[currpage][currline]:sub(currind)
+	doc[currpage][currline] = doc[currpage][currline]:sub(1,currind-1).._sym
+	_desl,_desp = -1,-1
+	--We then push the carry buffer down each line in the document
+	while nextLine(true) do
+		--This remembers where our cursor needs to be when we're done
+		if _desl == -1 or _desp == -1 then
+			_desl, _desp = currline, currpage
+		end
+		--First line form feed test
+		if _cbuff:find("\f") and currline == 1 then
+			table.insert(doc, currpage, { _cbuff })
+			_cbuff = nil
+			break
+		end
+		--We then swap out our buffer for the current line, to push down.
+		local _ctemp = doc[currpage][currline]
+		doc[currpage][currline] = _cbuff
+		_cbuff = _ctemp
+		--Special form feed test
+		if doc[currpage][currline]:find("\f") then 
+			break 
+		end
+	end
+	--We then drop in our last line
+	if _cbuff then
+		if currline < pagelen then
+			doc[currpage][currline+1] = _cbuff
+		else
+			doc[currpage+1] = { _cbuff }
+		end
+	end
+	--This updates our cursor back to where it should be
+	if _desl ~= -1 and _desp ~= -1 then
+		currind, currline, currpage = 1, _desl, _desp
+	else
+		--Called when we hit enter at the end of a document
+		nextLine()
+		currind = 1
+	end
+	testWait()
+	paginateUnderflow()
+	testWait()
+	checkYScroll()
+	setUpdated()
+end
+
+--[[ Adds a sequence of text to the current line and index
+	 Parameters: val:String = the character to be inserted
+	 Returns: none
+]]--
+local function addCharacter(_val)
+	local _cltext = doc[currpage][currline]
+	if currind > #_cltext then
+		_cltext = _cltext.._val
+	else
+		_cltext = _cltext:sub(1, currind-1).._val.._cltext:sub(currind)
+	end
+	doc[currpage][currline] = _cltext
+	currind = currind + #_val
+	paginateOverflow()
+	-- Space actions must also be underflowed; they may have broken a word.
+	if _val == " " then paginateUnderflow() end
+	checkYScroll()
+	setUpdated()
+end
+
+--[[ Removes a character from the current line and index
+	 Parameters: none
+	 Returns:String = the character that was deleted
+]]--
+function deleteCharacter()
+	--We first move our cursor to the character we want to delete
+	if currind == 1 then
+		if currline > 1 then currline = currline - 1
+		elseif currpage > 1 then
+			currpage = currpage - 1
+			currline = #doc[currpage]
+		else return end
+		currind = #doc[currpage][currline]
+	else currind = currind - 1 end
+	--Then create 2 'snips'; before and after the character
+	local _cline = doc[currpage][currline]
+	local _fsnip,_asnip = "",""
+	if currind > 1 then _fsnip = _cline:sub(1,currind-1) end
+	if currind < #_cline then _asnip = _cline:sub(currind+1) end
+	--We patch our snips, remove dead lines and do a cleanup
+	doc[currpage][currline] = _fsnip.._asnip
+	if doc[currpage][currline] == "" then
+		_lline = getPrevLine()
+		if not _lline or not hasBreakEnd(_lline) then
+	 		removeLine(currpage, currline)
+		end
+	end
+	paginateUnderflow()
+	fixCursorPos()
+	checkYScroll()
+	setUpdated()
+	return _cline:sub(currind,currind)
+end
+
+--[[Undoes the first action in the provided list, and pushes it's inverse to the second.
+	Parameters: _remList: the list to reverse the action
+				_addList: the list to push the move to
+	Returns: nil
+]]--
+local function undoAction(_remList,_addList)
+	if #_remList == 0 then return end
+	local _actionList,_newList = table.remove(_remList, #_remList), {}
+	testPrint("List has "..#_actionList.." elements")
+	for _,_action in ipairs(_actionList) do
+		testPrint("At "..currind.." doing ".._action.type.." <".._action.value..">")
+		currpage,currline,currind = _action.page, _action.line, _action.index
+		if _action.type == ACTIONS.ADDCHAR then
+			currind = currind + 1
+			deleteCharacter()
+			_action.type = ACTIONS.DELETECHAR
+		elseif _action.type == ACTIONS.DELETECHAR then
+			if _action.value == "\n" or _action.value == "\f" then
+				insertLineBreak(_action.value)
+				_action.type = ACTIONS.ADDBREAK
+			else
+				addCharacter(_action.value)
+				_action.type = ACTIONS.ADDCHAR
+			end
+		elseif _action.type == ACTIONS.ADDBREAK then
+			currind = currind + 1
+			deleteCharacter()
+			_action.type = ACTIONS.DELETECHAR
+		end
+		table.insert(_newList, 1, _action)
+	end
+	table.insert(_addList, _newList)
+end
+
+--[[Adds a new undoable action to the current list
+	Parameters: _ind: the index the cursor needs to be at
+				_type: the type of action
+				_value: the character impacted by the action
+
+]]--
+local function addUndoableAction(_ind, _type, _value)
+	if not actionTimer then
+		table.insert(undolist, {})
+	end
+	actionTimer = os.startTimer(actionDelay)
+	table.insert(undolist[#undolist], 1, {
+		page = currpage;
+		line = currline;
+		index = _ind;
+		type = _type;
+		value = _value;
+	})
+end
+
+--[[Returns the page and line by adding the given linecount. Allows going past
+	the bounds of the document, and can be used in reverse (but always stops at 1,1)
+	Params: _page:int = the page number to start at
+			_line:int = the line number to start at
+			_linecount:int = the number of lines to move forwards or backwards
+	Returns:int = the new page
+			int = the new line
+]]--
+function moveBy(_page, _line, _linecount)
+	_line = _line + _linecount
+	while _line > pagelen do 
+		_line = _line - pagelen 
+		_page = _page + 1
+	end
+	return _page, _line
+end
+
+--[[Takes a line with a page break terminator and determines whether or
+	not the document complies with the check. Only once per update now :)
+	Params: _pagenum:int = the page number of the line
+			_linenum:int = the line number
+	Returns: true if a change was made, false otherwise
+			 int,int: the new page and line number of the NEXT page break;
+			 this will need to be evaluated.
+]]--
+function performPageBreakCheck(_pagenum, _linenum)
+	if not _pagenum and not _linenum then _pagenum, _linenum = 1, 1 end
+	
+	--For all subsequent pages, a reverse parse to ensure there are no null lines
+	--between them and the next page (except where there are page breaks of course)
+	local _docEnd = #doc
+	local _nullSpace = {}
+	local _floatingLines = {}
+	_p = _pagenum
+	while _p <= #doc do
+		local _breakPassed = false
+		local _textOnPage = true
+		for _l=_linenum,pagelen do
+			local _line = doc[_p][_l]
+			if not _line then
+				if #_floatingLines > 0 and not _breakPassed then
+					doc[_p][_l] = table.remove(_floatingLines, 1)
+					if type(_floatingLines[1]) == "number" then
+						currind = table.remove(_floatingLines, 1)
+						currpage, currline = _p, _l
+					end
+					_textOnPage = true
+					if doc[_p][_l]:sub(#doc[_p][_l]) == "\f" then
+						_breakPassed = true
+						_nullSpace = {}
+					end
+				elseif not _breakPassed then
+					table.insert(_nullSpace, {_p, _l})
+				end
+			else
+				if _breakPassed then
+					table.insert(_floatingLines, _line)
+					if _p == currpage and _l == currline then
+						table.insert(_floatingLines, currind)
+					end
+					doc[_p][_l] = nil
+				elseif #_floatingLines > 0 then
+					table.insert(_floatingLines, _line)
+					doc[_p][_l] = table.remove(_floatingLines, 1)
+					if type(_floatingLines[1]) == number then
+						currind = table.remove(_floatingLines[1])
+						currpage, currline = _p, _l
+					end
+				elseif #_nullSpace > 0 then
+					local _ns = table.remove(_nullSpace, 1)
+					doc[_ns[1]][_ns[2]] = _line
+					doc[_p][_l] = nil
+					if currpage == _p and _currline == _l then
+						currpage, currline = _ns[1], _ns[2]
+					end
+					--Now this MAY be unsafe, but I can't recreate the issue on paper
+					if _line:sub(#_line) == "\f" then 
+						_breakPassed = true 
+						_nullSpaces = {}
+					end
+					if _ns[1] == _p then _textOnPage = true end
+				elseif _line:sub(#_line) == "\f" then 
+					_breakPassed = true
+					_textOnPage = true
+					_nullSpaces = {}
+				end
+			end
+		end
+		
+		if not _textOnPage and _p > 1 then
+			table.remove(doc, _p)
+			_p = _p - 1
+		end
+		if _p == #doc and #_floatingLines > 0 then
+			table.insert(doc, {}) 
+		end
+		if _p == #doc and _breakPassed and #_floatingLines == 0 then
+			table.insert(doc, {})
+			table.insert(_floatingLines, "")
+		end
+		
+		testWait()
+		_docEnd = #doc
+		_p = _p + 1
+		_linenum = 1
+	end
+	lscroll = true
+end
+
+--[[ Removes an entire line from the document, and shifts all previous
+	 lines up
+	 Parameters: pagenum:int = the page the line is on
+				 linenum:int = the line to remove
+	 Returns: none
+]]--
+function removeLine(_pagenum, _linenum)
+	_linenum = _linenum + 1
+	if _linenum > pagelen then _linenum = 1 _pagenum = _pagenum + 1 end
+	local _lp = ""
+	--To delete, we copy each line to replace the previous
+	while _pagenum <= #doc and _linenum <= #doc[_pagenum] do
+		local _cbuff = doc[_pagenum][_linenum]
+		if _linenum == 1 then 
+			doc[_pagenum-1][pagelen] = _cbuff
+			--Nothing follows a form feed, so the last page was empty. Delete!
+			if _cbuff:find("\f") then 
+				table.remove(doc, _pagenum)
+				assert(doc[_pagenum], "Deleted last page (ff) in remove line")
+				return
+			end
+		else 
+			doc[_pagenum][_linenum-1] = _cbuff
+			--Nothing follows a form feed so we stop removing here.
+			if _cbuff:find("\f") then doc[_pagenum][_linenum] = nil return end
+		end
+		if _linenum == pagelen then _linenum = 1 _pagenum = _pagenum + 1
+		else _linenum = _linenum + 1 end
+		_lp = _cbuff
+	end
+	--And black out the very last so we know nothing is there.
+	_linenum = _linenum - 1
+	if (_pagenum == 1 and _linenum == 1) or _lp:sub(#_lp) == "\n" then
+		doc[#doc][#doc[#doc]] = ""
+	else doc[#doc][#doc[#doc]] = nil end
+	if #doc[#doc] == 0 and #doc ~= 1 then 
+		table.remove(doc, #doc) 
+	end
+	--So long as we still have something in the doc
+	if #doc[1] == 0 then doc[1][1] = "" end
+end
+
+--[[ Inserts a line of text into a specified index. The replaced line and
+	 all subsequent lines are pushed down the document
+	 Parameters: _pagenum:int = the page the line is one
+				 _linenum:int = the line in which to insert
+				 _text:string = the text to insert. Defaults to a newline.
+]]--
+function insertLine(_pagenum, _linenum, _text)
+	if not _text then _text = "\n" end
+	local _pi,_li = #doc, #doc[#doc] + 1
+	if _li > linelen then _pi = _pi + 1 _li = 1 end
+	if not doc[_pi] then doc[_pi] = { } end
+	local _icount = 0
+	while _pi > _pagenum or _li > _linenum do
+		doc[_pi][_li] = getPrevLine(_pi,_li)
+		_li = _li - 1
+		if _li == 0 then _li = pagelen _pi = _pi - 1 end
+		_icount = _icount + 1
+	end
+	doc[_pagenum][_linenum] = _text
+end
+
+
+--[[ Updates pagination at the point following the cursor for overflow as 
+	 a result of an insertion edit action. The overflow by default only
+	 checks so far as the previous insertion but can be set to check the entire
+	 program through a switch.
+	 Returns: none
+]]--
+function paginateOverflow()
+	--Whether or not we need to keep paginating
+	local _pfollow = false
+	--The line we start at on this page
+	local _pi,_nli = currpage, currline
+	--Whether or not we've done an insertion, and need to perform another check
+	local _icheck = false
+	
+	while _pi <= #doc do
+		_li = _nli
+		while _li <= #doc[_pi] do
+			local _cltext = doc[_pi][_li]
+			--First we check to see if it's a carry-on line
+			local _conn = 0
+			local _nl = getNextLine(_pi,_li)
+			if _nl and _cltext:sub(#_cltext) ~= " " and 
+					_nl:sub(1,1) ~= " " then
+				_conn = _nl:find(" ")
+				if not _conn then _conn = _nl:find("[\n\f]") end
+				if not _conn then _conn = #_nl
+				else 
+					_conn = _conn - 1 
+				end
+			end
+			--And a bit of leniency for newlines (they don't print anyway)
+			if hasBreakEnd(_cltext) then _conn = -1 end
+			--If the line is shorter than the line length, we are done
+			if (#_cltext + _conn <= linelen and not _icheck) 
+					or #_cltext == 0 then
+				_pfollow = true
+				break
+			end
+			_icheck = false
+
+			--Next check is for form feeds stuck between lines, we space them out
+			local _nsp = -1
+			local _ffline = _cltext:find("\f")
+			if _ffline and _ffline <= linelen then _nsp = _ffline end
+			
+			--Otherwise we find the nearest space to the edge of the document
+			if _nsp == -1 then 
+				for _nsi = linelen, 1, -1 do
+					if _cltext:sub(_nsi,_nsi) == " " then
+						_nsp = _nsi
+						break
+					end
+				end 
+			end
+			--The excess string is carried to the front of the next line or page
+			--Notice the space stays if there is more than one word on that line
+			if _nsp == -1 then _nsp = linelen end
+			doc[_pi][_li] = doc[_pi][_li]:sub(1,_nsp)
+			_carrystr = _cltext:sub(_nsp+1)
+			if _li == pagelen then
+				if _pi == #doc then
+					doc[_pi+1] = { _carrystr }
+				--Both newlines and form feeds must be carried, and cannot overflow.
+				elseif hasBreakEnd(_carrystr) then
+					insertLine(_pi+1,1,_carrystr)
+					_icheck = true
+				else
+					doc[_pi+1][1] = _carrystr..doc[_pi+1][1]
+				end
+			elseif _li == #doc[_pi] then 
+				doc[_pi][_li+1] = _carrystr
+				--Newlines must have a following space in addition to this.
+			elseif _carrystr:sub(#_carrystr) == "\n" then
+				insertLine(_pi,_li+1,_carrystr)
+				_icheck = true
+			elseif _carrystr:sub(#_carrystr) == "\f" then
+				assert(false, "Carry form feed at ".._pi..",".._li)
+			else
+				doc[_pi][_li+1] = _carrystr..doc[_pi][_li+1]
+			end
+			--If this pagination affected our cursor, we move down a line
+			if _pi == currpage and _li == currline and
+					 currind > #doc[currpage][currline] then
+				currind = currind - #doc[currpage][currline]
+				if currline == pagelen then
+					currline = 1
+					currpage = currpage + 1
+				else
+					currline = currline + 1
+				end
+			end
+			_li = _li + 1
+			testWait()
+		end
+		if _pfollow then break end
+		_nli = 1
+		_pi = _pi + 1
+	end
+	performPageBreakCheck()
+end
+
+--[[ Updates pagination at the point following the trailing line from the
+	 cursor for underflow as a result of a delete edit action.
+	 The pagination is optimized to only go so far as it has to when making
+	 changes, but can cover the entire document through a switch.
+	 Parameters: _cflag:bool= set to true to check entire document
+	 Returns: none
+]]--
+function paginateUnderflow(_cflag)
+	--Whether or not we need to keep paginating
+	local _pfollow = false
+	--Whether or not a vulnerable underflow occurred. These are characterized
+	--as underflows that leave a partial word behind.
+	local _vocc = false
+	--How many pagination checks we need to run. It's a minimum of 2
+	--if we're on the same line
+	local _pcount = 3
+	
+	--First step, we check out how the page breaks have modified things
+	performPageBreakCheck()
+	
+	--The line we start at on this page
+	local _pi,_nli = currpage, currline
+	if _cflag then _pi,_nli = 1,1 end
+	--Our comparataor line
+	local _cpline = doc[_pi][_nli]
+	--The last character of the second to last line
+	local _llsnip = nil
+	--Where do we start, here or next line?
+	if _pi == 1 and _nli == 1 then _nli = _nli + 1 _pcount = _pcount - 1
+	elseif _nli == 1 then 
+		_cpline = doc[_pi-1][#doc[_pi-1]]
+	else _cpline = doc[_pi][_nli-1] end
+	
+	while _pi <= #doc do
+		local _li = _nli
+		while _li <= #doc[_pi] do
+			_llsnip = _cpline:sub(#_cpline)
+			local _cline = doc[_pi][_li]
+			local _nsp = -1
+			local _conn = 0
+			if hasBreakEnd(_cline) then _conn = -1 end
+			--We search for a word that will fit on the previous line
+			for _nsi = linelen - #_cpline,1,-1 do
+				if _cline:sub(_nsi,_nsi) == " " then
+					_nsp = _nsi
+					--Because we don't use it here
+					_conn = 0
+					break
+				end
+			end
+			--Single words short enough can be moved too
+			if #_cline+_conn <= linelen - #_cpline then 
+				_nsp = #_cline+_conn
+				--A little exception in the event we leave our cursor behind
+			end
+			--And if there's no space at the end of the line, it moves back too
+			if _nsp == -1 and _cpline:sub(#_cpline) ~= " " 
+					and not hasBreakEnd(_cpline) then
+				_nsp = linelen - #_cpline
+				--Also unused here
+				_conn = 0
+				--This however now requires an overflow check
+				_vocc = true
+			end
+			
+			--If no such word exists, we're done
+			--Also, if our comparator line has a break, underflow is disallowed
+			--NOTE: Hideous code. This could be done far better.
+			if (_nsp == -1 or hasBreakEnd(_cpline)) then
+				if _pi ~= currpage and _li ~= currline and _pcount == 0 then
+					_pfollow = true
+					break
+				end
+			else
+				--Otherwise we snip our words from the current line,
+				local _snip = _cline:sub(1,_nsp-_conn)
+				doc[_pi][_li] = _cline:sub(_nsp+1-_conn)
+				--then stick the snip on the next line (lazy coding but meh)
+				if _li > 1 then doc[_pi][_li-1] = doc[_pi][_li-1].._snip
+				else
+					doc[_pi-1][#doc[_pi-1]] = doc[_pi-1][#doc[_pi-1]].._snip 
+				end
+				--If we performed a deletion on the cursor line line and the
+				--cursor is within the clip, we must move it
+				if _pi == currpage and _li == currline and currind <= _nsp-_conn then
+					currind = currind + #_cpline 
+					if _li == 1 then 
+						currpage = currpage -1 
+						currline = pagelen
+					else 
+						currline = currline - 1 
+					end
+				end
+			end
+			--Remove any excess lines
+			local _slsnip = getPrevLine(#doc, #doc[#doc])
+			if doc[_pi][_li] == "" and not(isLastLine(_pi, _li) 
+					and hasBreakEnd(_slsnip)) then 
+				--Remove line was not moving cursor. This needs to be fixed in later versions.
+				if _pi > currpage or (_pi == currpage and currline >= _li) then 
+					--Our exception case; cursor is at EOF
+					if _pi == #doc and _li == #doc[_pi] then
+						removeLine(_pi,_li) 
+						fixCursorPos()
+					else
+						removeLine(_pi,_li)
+					end
+				else
+					removeLine(_pi,_li)
+				end
+				_li = _li - 1
+			end
+			--Update our variables, and we're done here.
+			if not doc[_pi] or not doc[_pi][_li] then break end
+			_cpline = doc[_pi][_li]
+			_li = _li + 1
+			_pcount = math.max(_pcount-1, 0)
+		end
+		if _pfollow then break end
+		_nli = 1
+		_pi = _pi + 1
+	end
+	--Unsafe carryovers have to check for overflow pagination.
+	if _vocc then 
+		paginateOverflow() 
+	end
+end
+
+--[[ Draws the 'whitespace' surrounding the page and the menu. This includes both
+	 page-display features like the margins around the page and borders to make it more
+	 distinct.
+	 Parameters: none
+	 Returns: none
+]]--
+local function displayClearPage()
+	--Drawing the background
+	term.setBackgroundColour(colours.lightBlue)
+	term.clear()
+	term.setBackgroundColour(colours.grey)
+	--Adding a little border to the page to make it more distinct
+	local _ydpos = _yoff + yscroll - 1
+	if _ydpos > 0 and _ydpos <= h then
+		term.setCursorPos(_xoff + 1, _ydpos)
+		term.write(string.rep(" ", 2 + linelen))
+		term.setBackgroundColour(colours.white)
+		term.setCursorPos(_xoff, _ydpos + 1)
+		term.write(string.rep(" ", 2 + linelen))
+	end
+	if _ydpos + pagelen + 2 > 0 and _ydpos + pagelen + 2 <= h then
+		term.setBackgroundColour(colours.white)
+		term.setCursorPos(_xoff, _ydpos + pagelen + 2)
+		term.write(string.rep(" ", 2 + linelen))
+	end
+	for i = math.max(0, _ydpos), math.min(h, pagelen + yscroll + _yoff) do
+		if i > _ydpos or i == 0 then
+			term.setBackgroundColour(colours.white)
+			term.setCursorPos(_xoff, i)
+			term.write(" ")
+			term.setCursorPos(_xoff + linelen + 1, i)
+			term.write(" ")
+		else
+			term.setCursorPos(_xoff + linelen + 2, i)
+		end
+		term.setBackgroundColour(colours.grey)
+		term.write(" ")
+	end
+end
+
+--[[ Draws the currently selected page. This prints exactly the contents of the page and
+	 whitespace to fill out the gaps as necessary. 
+	 Parameters: page:The page of the document to print
+				 _out: The output construct
+				 _x:int = the x offset for the page to be printed at
+				 _y:int = the y offset for the page to be printed at
+	 Returns: none
+]]--
+function printPage(pagenum, _out, _x, _y)
+	page = doc[pagenum]
+	if not _x or not _y then _x = 1 _y = 0 end	
+	--Displaying the page itself, both text and no text
+	for i=1,pagelen do
+		local _ydpos = i + _y
+		--This little optimization only works if _out == term, so it's not in for now.
+		--if _out == term and _ydpos > 1 and _ydpos <= h then
+		_out.setCursorPos(_x, i + _y)
+		if i > 0 and i <= #page then
+			local _wsEnd = hasBreakEnd(page[i])
+			local _disp = string.gsub(page[i], "\n"," ")
+			--Depending on the alignment, we add whitespace to make up the difference.
+			local _wchar = " "
+			if testMode then
+				term.setTextColour(colours.red)
+				_wchar = "-"
+			end
+			term.write(string.rep(_wchar, getWhitespaceLength(pagenum,i)))
+			-- Our whitespace display function
+			if (whitespaceVis or testMode) and _out == term then
+				for _c=1,#page[i] do
+					local _chr = page[i]:sub(_c,_c)
+					if _chr == " " then
+						term.setTextColour(colours.red)
+						term.write(".")
+					elseif _chr == "\n" then
+						term.setTextColour(colours.red)
+						term.write(">")
+					elseif _chr == "\f" then
+						term.setTextColour(colours.red)
+						term.write("V")
+					else
+						term.setTextColour(colours.black)
+						term.write(_chr)
+					end
+				end
+				term.setTextColour(colours.black)
+			else
+				--Bah. This has to change. Forget nice code. This program is one enormous, hideous hack.
+				_out.write(_disp)
+			end
+			_out.write(string.rep(" ", math.max(linelen - #_disp - 
+					getWhitespaceLength(pagenum, i), 0)))
+			--Another hack. Exactly what I am....
+			if _out == term and not _wsEnd then _out.write(" ") end
+		else
+			_out.write(string.rep(" ", linelen))
+		end
+--		end
+	end
+end
+
+
+		--[[ Interface malarky ]]--
+
+--[[ A presently mostly empty function that displays tools and information about the
+	 current document for the user
+	 Parameters: none
+	 Returns: none
+]]--
+local function displayInterface()
+	term.setBackgroundColour(colours.lightBlue)
+	term.setTextColour(colours.black)
+	--A little interface feature to tell the user what page they're viewing
+	local _ppos = string.rep(" ",math.floor(math.log10(#doc)) - math.floor(math.log10(currpage)))
+			..currpage.." of "..#doc
+	term.setCursorPos(w-#_ppos-1,h)
+	term.setTextColour(colours.black)
+	term.write(_ppos)
+	term.setCursorPos(1,1)
+	term.setBackgroundColour(colours.lightGrey)
+	if testMode then term.setBackgroundColour(colours.red) end
+	term.setTextColour(colours.black)
+	term.clearLine()
+	
+	term.setCursorPos(_mChoices.x, _mChoices.y)
+	term.write(_mChoices.name)
+	term.setCursorPos(_eChoices.x, _eChoices.y)
+	term.write(_eChoices.name)
+	
+	local _t = sPath or "Unnamed"
+	if #_t > w - 14 then _t = _t:sub(1,#_t-math.max(sName,14)-3).."..."..sName end
+	term.setTextColour(colours.grey)
+	term.setCursorPos(w/2-#_t/2,1)
+	term.write(_t)
+	if sChange then 
+		term.setTextColour(colours.red)
+		term.write("*") 
+	end
+end
+
+--[[ Clears and redraws the screen ]]--
+local function clearAndRedraw()
+	displayClearPage()
+	term.setBackgroundColour(colours.white)
+	term.setTextColour(colours.black)
+	printPage(currpage, term, _xoff + 1, _yoff + yscroll)
+	displayInterface()
+end
+
+--[[ Draws the WYSIwrite logo. ENORMOUSLY lazy but I'm over this. ]]--
+local function drawLogo(x,y)
+	term.setBackgroundColour(colours.grey)
+	for i=2,3 do
+		term.setCursorPos(x,y+i)
+		term.write(string.rep(" ", 5))
+	end
+	term.setBackgroundColour(colors.white)
+	for i=0,3 do if i ~= 2 then 
+		term.setCursorPos(x + 1, y+i)
+		term.write(string.rep(" ",3))
+	end end
+	term.setCursorPos(x+2,y+1)
+	term.write("W")
+end
+
+--[[ Shows a quick "about" page for those curious ]]--
+local function displayAbout()
+	local _dw,_dh = w/2+3,6
+	local _l,_t = math.floor(w/2-_dw/2),6
+	
+	clearAndRedraw()
+	term.setBackgroundColour(colours.lightGrey)
+	term.setTextColour(colours.black)
+	for _y=0,_dh do
+		term.setCursorPos(_l,_t+_y)
+		term.write(string.rep(" ", _dw))
+	end
+	term.setCursorPos(_l + 7, _t + 2)
+	term.write("WYSIwrite")
+	term.setCursorPos(_l + 7, _t + 4)
+	term.write("By Nitrogen Fingers")
+	drawLogo(_l + 1, _t + 1)
+	while true do
+		local id,_key = os.pullEvent()
+		if id == "timer" and _key == bTimer then saveDocument(bPath)
+		else break end
+	end
+	lscroll = true
+end
+
+--[[ A recycled centre print function I've gotten a LOT of mileage out of
+	 Parameters: msg:string= the message to display
+				 height:int= the y position of the start of the message
+				 width:int= the allowed width of the message
+				 offset:int= the leftmost border of the message
+	 Returns:int= the number of lines printed
+]]--
+local function wprintOffCenter(msg, height, width, offset)
+	local inc = 0
+	local ops = 1
+	while #msg - ops > width do
+		local nextspace = 0
+		while string.find(msg, " ", ops + nextspace) and
+				string.find(msg, " ", ops + nextspace) - ops < width do
+			nextspace = string.find(msg, " ", nextspace + ops) + 1 - ops
+		end
+		local ox,oy = term.getCursorPos()
+		term.setCursorPos(width/2 - (nextspace)/2 + offset, height + inc)
+		inc = inc + 1
+		term.write(string.sub(msg, ops, nextspace + ops - 1))
+		ops = ops + nextspace
+	end
+	term.setCursorPos(width/2 - #string.sub(msg, ops)/2 + offset, height + inc)
+	term.write(string.sub(msg, ops))
+   
+	return inc + 1
+end
+
+--[[Produces a nice dropdown menu based on a table of strings. Depending on the position, this will auto-adjust the position
+        of the menu drawn, and allows nesting of menus and sub menus. Clicking anywhere outside the menu will cancel and return nothing
+        Params: x:int = the x position the menu should be displayed at
+                y:int = the y position the menu should be displayed at
+                options:table = the list of options available to the user, as strings or submenus (tables of strings, with a name parameter)
+        Returns:string the selected menu option.
+]]--
+local function displayDropDown(x, y, options, noTitle)
+	inDropDown = true
+	if noTitle then y = y - 1 end
+	--Figures out the dimensions of our thing
+	local longestX = #options.name
+	for i=1,#options do
+		local currVal = options[i]
+		if type(currVal) == "table" then currVal = currVal.name end
+		longestX = math.max(longestX, #currVal)
+	end
+	local xOffset = math.max(0, longestX - ((w-2) - x) + 1)
+	local yOffset = math.max(0, #options - ((h-1) - y))
+   
+	local clickTimes = 0
+	local tid = nil
+	local selection = nil
+	while clickTimes < 4 do
+		if not noTitle then
+			term.setCursorPos(x-xOffset,y-yOffset)
+			term.setBackgroundColour(colours.blue)
+			term.setTextColour(colours.white)
+			term.write(options.name.." ")
+		end
+
+		for i=1,#options do
+			term.setCursorPos(x-xOffset, y-yOffset+i)
+			local currVal = options[i]
+			if type(currVal.value) == "table" then
+				currVal.enabled = #currVal.value > 0 
+			end
+			
+			if i==selection and clickTimes % 2 == 0 then
+				term.setBackgroundColour(colours.blue)
+				if options[selection].enabled then term.setTextColour(colours.white)
+				else term.setTextColour(colours.grey) end
+			else
+				term.setBackgroundColour(colours.lightGrey)
+				local _tcol = colours.black
+				if not currVal.enabled then _tcol = colours.grey end 
+				term.setTextColour(_tcol)
+			end
+			if type(currVal.value) == "table" then
+				term.write(currVal.name..string.rep(" ", longestX-#currVal.name))
+				term.setBackgroundColour(colours.blue)
+				term.setTextColour(colours.white)
+				term.write(">")
+			else
+				term.write(currVal.name..string.rep(" ", longestX-#currVal.name + 1))
+			end
+			
+			if (i~= selection or clickTimes %2 == 1) and currVal.key and currVal.enabled then
+				term.setTextColour(colours.blue)
+				term.setBackgroundColour(colours.lightGrey)
+				local co = currVal.name:find(currVal.key) 
+				if not co then co = longestX else co = co - 1 end
+				term.setCursorPos(x-xOffset+co, y-yOffset + i)
+				term.write(currVal.key)
+			end
+		end
+	   
+		local id, p1, p2, p3 = os.pullEvent()
+		if id == "timer" then
+			if p1 == tid then
+				clickTimes = clickTimes + 1
+				if clickTimes > 2 then
+					break
+				else
+					tid = os.startTimer(0.1)
+				end
+			elseif p1 == bTimer then saveDocument(bPath) end
+		elseif id == "key" and not tid then
+			if p1 == keys.leftCtrl then
+				selection = ""
+				break
+			elseif p1 == keys.down and (not selection or selection < #options) then
+				selection = selection or 0
+				_os = selection
+				repeat selection = selection + 1
+				until selection == #options + 1 or options[selection].enabled
+				--if selection == #options + 1 then selection = _os end
+			elseif p1 == keys.up and (not selection or selection > 1) then
+				selection = selection or #options + 1
+				_os = selection
+				repeat selection = selection - 1
+				until selection == 0 or options[selection].enabled
+				if selection == 0 then selection = _os end
+			elseif p1 == keys.enter and selection and options[selection].enabled then
+				tid = os.startTimer(0.1)
+				clickTimes = clickTimes - 1
+			end
+		elseif id == "mouse_click" and not tid then
+			local _xp, _yp = x - xOffset, y - yOffset
+			if p2 >= _xp and p2 <= _xp + longestX + 1 and 
+			p3 >= _yp+1 and p3 <= _yp+#options then
+				if options[p3 - _yp].enabled then
+					selection = p3-(_yp)
+					tid = os.startTimer(0.1)
+				end
+			else
+				selection = ""
+				break
+			end
+		elseif id == "char" and not tid then
+			for k,v in ipairs(options) do
+				if v.key and v.key:lower() == p1:lower() and options[k].enabled then
+					selection = k
+					tid = os.startTimer(0.1)
+					break
+				end
+			end
+		end
+	end
+	
+	local _val = selection
+	if type(selection) == "number" then
+		selection = options[selection].value
+	end
+   
+	if type(selection) == "string" then
+		inDropDown = false
+		return selection
+	elseif type(selection) == "table" then
+		return displayDropDown(x + longestX + 1, y + _val, selection, true)
+	elseif type(selection) == "function" then
+		local _rval = selection()
+		if not _rval then return "" else return _rval end
+	end
+end--[[ Copied out of other menus, simply provides a display to indicate something has happened.
+	 Parameters: ctitle:string = the title of the dialogue
+			   	 msg:string = the message in the dialogue
+				 arg:{string, colour} = pairs of buttons with strings and their text colour (background is default)
+	 Returns: none
+]]--
+local function displayConfirmDialogue(ctitle, msg, ...)
+	local _doffX, _doffY = 8, 5
+	--We actually print twice- once to get the lines, second time to print proper. Easier this way.
+	local lines = wprintOffCenter(msg, _doffY, w - (_doffX+2) * 2, _doffX + 2)
+   
+	term.setCursorPos(_doffX, 3)
+	term.setBackgroundColour(colours.blue)
+	term.setTextColour(colours.white)
+	term.write(string.rep(" ", w - _doffX * 2))
+	term.setCursorPos(_doffX + (w - _doffX * 2)/2 - #ctitle/2, 3)
+	term.write(ctitle)
+	term.setTextColour(colours.black)
+	term.setBackgroundColour(colours.lightGrey)
+	term.setCursorPos(_doffX, 4)
+	term.write(string.rep(" ", w - _doffX * 2))
+	for i = _doffY, _doffY + lines do
+		term.setCursorPos(_doffX, i)
+		term.write(" "..string.rep(" ", w - (_doffX) * 2 - 2).." ")
+	end
+	wprintOffCenter(msg, _doffY, w - (_doffX+2) * 2, _doffX + 2)
+	
+	if arg then 
+		term.setCursorPos(_doffX, _doffY + lines + 1)
+		term.write(string.rep(" ", w - _doffX * 2))
+		term.setCursorPos(_doffX, _doffY + lines + 2)
+		term.write(string.rep(" ", w - _doffX * 2))
+	
+		local _sspace = 0
+		for _k,_v in ipairs(arg) do _sspace = _sspace + #_v[1] end 
+		_sspace = (w - (_doffX * 2) - _sspace - (2 * #arg))/(#arg)
+		if _sspace <= #arg - 1 then assert(false, "Too little space: needed "..(#arg - 1)..", got ".._sspace) end
+		term.setBackgroundColour(colours.grey)
+		term.setCursorPos(_doffX + 1, _doffY + lines + 1)
+		local _spart = false
+		for i=1,#arg do
+			_v = arg[i]
+			arg[i][3] = term.getCursorPos()
+			term.setTextColour(_v[2])
+			term.write(" ".._v[1].." ")
+			local _vspace = math.floor(_sspace)
+			if i >= #arg/2 and not _spart then _vspace = math.ceil(_sspace) _spart = true end
+			local _x,_y = term.getCursorPos()
+			term.setCursorPos(_x + _vspace, _y)
+		end
+	end
+   
+	--In the event of a message, the player hits anything to continue
+	while true do
+		local _id,_p1,_p2,_p3 = os.pullEvent()
+		if (not arg or #arg == 0) and (id == "key" or id == "mouse_click" or id == "mouse_drag") then 
+			break
+		elseif _id == "key" then
+			if _p1 == keys.enter then return 1 end
+			if _p1 == keys.backspace then return 2 end
+		elseif _id == "mouse_click" and _p3 == _doffY + lines + 1 then
+			for i=1,#arg do
+				_v = arg[i]
+				if _p2 >= _v[3] and _p2 <= _v[3] + #_v[1] + 1 then return i end 
+			end
+		elseif _id == "timer" and _p1 == bTimer then saveDocument(bPath) end
+	end
+end
+
+--[[ Runs a printing interface that lets users select the pages and number of copies to print
+	 Also displays toner and paper levels, and returns the start, end and copy number, or null.
+]]--
+local function displayPrint(_printer,_w,_h,_y,_x)
+	_w = math.floor(_w)
+	if not _x then _x = math.floor(w/2-_w/2) else _x = math.floor(_x) end
+	if not _y then _y = math.floor(h/2-_h/2) end
+	local _bc,_tc = colours.lightGrey, colours.black
+	local _btc,_ttc = colours.blue, colours.white
+	local _bfc,_tfc,_tdc = colours.black, colours.white, colours.green
+	--The position of the text boxes (which can vary)
+	local _cXoff,_cYoff = 0,0
+	local _pX,_pY,_cX,_cY = 0,0,0,0
+	--The selected pages and copies
+	local _pstart, _pend, _copies = 1, #doc, 1
+	--The amount of paper and ink required
+	local _pageCount = (_pend - _pstart + 1) * _copies 
+	local _ilX,_ilY = 0,0
+	
+	local _wsel = 0
+	
+	local function _drawWindow()
+		--Window title
+		term.setBackgroundColour(_btc)
+		term.setTextColour(_ttc)
+		term.setCursorPos(_x,_y)
+		_title = "Print"
+		term.write(string.rep(" ", math.floor(_w/2) - math.floor(#_title/2))
+				.._title..string.rep(" ", math.ceil(_w/2) - math.ceil(#_title/2)-1))
+		term.setBackgroundColour(colours.red)
+		term.setTextColour(colours.white)
+		term.write("x")
+		--Body and main options
+		term.setBackgroundColour(_bc)
+		term.setTextColour(_tc)
+		for i=1,_h do
+			term.setCursorPos(_x,_y+i)
+			term.write(string.rep(" ", _w))
+		end
+		
+		--Hardcoded value. To change.
+		local _plen = math.log10(#doc) + 1
+		term.setCursorPos(_x + 1, _y + 2)
+		term.write ("Print: ")
+		_pX,_pY = term.getCursorPos()
+		term.setBackgroundColour(colours.white)
+		term.write(string.rep(" ", _plen))
+		term.setBackgroundColour(_bc)
+		term.write("-")
+		term.setBackgroundColour(colours.white)
+		term.write(string.rep(" ", _plen))
+		term.setBackgroundColour(_bc)
+		
+		local _ctoken = "Copies: "
+		local _clen,_cx,_cy = 2, term.getCursorPos()
+		if _cx + #_ctoken + _clen + 2 > _x + _w - 1 then
+			_cXoff = 1
+			_cYoff = 2
+			_ilY = _cy + 4
+			term.setCursorPos(_x + _cXoff, _cy + _cYoff)
+		else
+			_cXoff = _cx + #_ctoken + 3
+			_ilY = _cy + 2
+			term.write("  ")
+		end
+		term.write(_ctoken)
+		_cX, _cY = term.getCursorPos()
+		term.setBackgroundColour(colours.white)
+		term.write("  ")
+		
+		term.setBackgroundColour(_bc)
+		term.setCursorPos(_x + 1, _ilY)
+		term.write("Toner level: ")
+		term.setCursorPos(_x + 1, _ilY + 1)
+		term.write("Paper level: ")
+		_ilX = term.getCursorPos()
+		
+		--Cancel button
+		term.setBackgroundColour(colours.grey)
+		term.setTextColour(colours.red)
+		term.setCursorPos(_x + _w - 10, _y + _h - 1)
+		term.write(" Cancel ")
+	end
+	
+	local function _drawPrintOptions()
+		--Numbers in the pages and copies box
+		if _wsel ~= 1 and _pstart == nil then _pstart = 1 end
+		if _wsel ~= 2 and _pend == nil then _pend = 1 end
+		if _wsel ~= 3 and _copies == nil then _copies = 1 end
+		
+		term.setCursorPos(_pX, _pY)
+		term.setTextColour(colours.black)
+		if _wsel == 1 then term.setBackgroundColour(colours.orange)
+		else term.setBackgroundColour(colours.white) end
+		if _pstart == nil then term.write(string.rep(" ", math.log10(#doc) + 1))
+		else term.write(string.rep(" ", math.floor(math.log10(#doc)) - math.floor(math.log10(_pstart))).._pstart) end
+		if _wsel == 2 then term.setBackgroundColour(colours.orange)
+		else term.setBackgroundColour(colours.white) end
+		term.setCursorPos(term.getCursorPos() + 1, _pY)
+		if _pend == nil then term.write(string.rep(" ", math.log10(#doc) + 1))
+		else term.write(string.rep(" ", math.floor(math.log10(#doc)) - math.floor(math.log10(_pend))).._pend) end
+		if _wsel == 3 then term.setBackgroundColour(colours.orange)
+		else term.setBackgroundColour(colours.white) end
+		term.setCursorPos(_cX, _cY)
+		if _copies == nil then term.write(string.rep(" ", 2))
+		else term.write(string.rep(" ", 1 - math.floor(math.log10(_copies))).._copies) end
+		
+		--Ink and paper levels
+		local _iLvl, _pLvl = _printer.getInkLevel(), _printer.getPaperLevel()
+		if not _pstart or not _pend or not _copies then _pageCount = -1 
+		else _pageCount = (_pend - _pstart + 1) * _copies end
+		if _pageCount <= 0 then _pageCount = -1 end
+		term.setBackgroundColour(_bc)
+		if _iLvl < _pageCount then term.setTextColour(colours.red)
+		else term.setTextColour(colours.black) end
+		term.setCursorPos(_ilX, _ilY)
+		term.write(_iLvl.."")
+		term.setTextColour(colours.black)
+		if _pageCount == -1 then term.write(" (--)")
+		else term.write(" (".._pageCount..")") end
+		term.write(string.rep(" ", _x + _w - term.getCursorPos()))
+		term.setCursorPos(_ilX, _ilY + 1)
+		if _pLvl < _pageCount then term.setTextColour(colours.red)
+		else term.setTextColour(colours.black) end
+		term.write(_pLvl.."")
+		
+		--Print/Invalid button
+		term.setCursorPos(_x + 1, _y + _h - 1)
+		term.setBackgroundColour(colours.grey)
+		if not _pstart or not _pend or _pstart > _pend then
+			term.setTextColour(colours.lightGrey)
+			term.write(" Invalid ")
+		else
+			term.setTextColour(colours.green)
+			term.write(" Print ")
+			term.setBackgroundColour(colours.lightGrey)
+			term.write("  ")
+		end
+	end
+	
+	local function _runInput()
+		while true do
+			local _id, _p1, _p2, _p3 = os.pullEvent()
+			if _id == "mouse_click" then
+				if _p2 >= _pX and _p2 <= _pX + math.floor(math.log10(#doc)) and _p3 == _pY then
+					_wsel = 1
+					_pstart = nil
+					_drawPrintOptions()
+				elseif _p2 >= _pX + math.floor(math.log10(#doc)) + 2 and _p2 <= _pX + (2*math.floor(math.log10(#doc))) + 2 and
+						_p3 == _pY then
+					_pend = nil
+					_wsel = 2
+					_drawPrintOptions()
+				elseif _p2 >= _cX and _p2 <= _cX + 1 and _p3 == _cY then
+					_copies = nil
+					_wsel = 3
+					_drawPrintOptions()
+				elseif _p2 >= _x + 1 and _p2 <= _x + 8 and _p3 == _y + _h - 1 and _pstart <= _pend then
+					if _pstart == nil then _pstart = 1 end
+					if _pend == nil then _pend = #doc end
+					if _copies == nil then _copies = 1 end
+					return true
+				elseif (_p2 >= _x + _w - 9 and _p2 <= _x + _w - 1 and _p3 == _y + _h - 1) or 
+						(_p2 == _x + _w - 1 and _p3 == _y) then
+					return false
+				else
+					_wsel = 0
+					_drawPrintOptions()
+				end
+			elseif _id == "key" then
+				if _p1 == keys.delete or _p1 == keys.backspace then
+					if _wsel == 1 and _pstart then _pstart = math.floor(_pstart / 10) if _pstart == 0 then _pstart = nil end
+					elseif _wsel == 2 and _pend then _pend = math.floor(_pend / 10) if _pend == 0 then _pend = nil end
+					elseif _wsel == 3 and _copies then _copies = math.floor(_copies / 10) if _copies == 0 then _copies = nil end
+					end
+					_drawPrintOptions()
+				elseif _p1 == keys.tab then
+					_wsel = (_wsel % 3) + 1
+					_drawPrintOptions()
+				elseif _p1 == keys.enter and _pstart <= _pend then
+					if _pstart == nil then _pstart = 1 end
+					if _pend == nil then _pend = #doc end
+					if _copies == nil then _copies = 1 end
+					return true
+				end
+			elseif _id == "char" and _wsel > 0 and tonumber(_p1) then
+				if _wsel == 1 then
+					if not _pstart then _pstart = 0 end
+					_pstart = (10 * _pstart) + tonumber(_p1)
+					if _pstart > #doc then _pstart = #doc
+					elseif _pstart == 0 then _pstart = nil end
+					_drawPrintOptions()
+				elseif _wsel == 2 then
+					if not _pend then _pend = 0 end
+					_pend = (10 * _pend) + tonumber(_p1)
+					if _pend > #doc then _pend = #doc
+					elseif _pend == 0 then _pend = nil end
+					_drawPrintOptions()
+				elseif _wsel == 3 then
+					if not _copies then _copies = 0 end
+					_copies = (10 * _copies) + tonumber(_p1)
+					if _copies > 99 then _copies = 99 
+					elseif _copies == 0 then _copies = nil end
+					_drawPrintOptions()
+				end
+			elseif _id == "timer" and _p1 == bTimer then saveDocument(bPath) end
+		end
+	end
+	
+	_drawWindow()
+	_drawPrintOptions()
+	if _runInput() then return _pstart, _pend, _copies end
+end
+
+--[[ A more elaborate save menu than my first effort. Directory navigation and
+	 selection. It works well enough.
+]]--
+local function displayFileBrowser(_flag,_h,_w,_y,_x)
+	local _mt = { ["-s"] = "Save As", ["-b"] = "Browse Files", ["-l"] = "Load File" }
+	if not _h then _h = math.floor(h/2) else _h = math.floor(_h) end
+	if not _w then _w = math.floor(w/2) else _w = math.floor(_w) end
+	if not _x then _x = math.floor(w/2-_w/2) + 1 else _x = math.floor(_x) end
+	if not _y then _y = math.floor(h/2-_h/2) end
+	local _bc,_tc = colours.lightGrey, colours.black
+	local _btc,_ttc = colours.blue, colours.white
+	local _bfc,_tfc,_tdc = colours.black, colours.white, colours.green
+	local _fname = sName or ""
+	--This is a nasty timesaver.
+	local _cpath = sPath or "/"..shell.resolve(".")
+	if not _cpath:find("/") then 
+		_cpath = ""
+	elseif sPath then 
+		_cpath = "/"..getPreviousDir(_cpath) 
+	end
+	local _rlist = fs.list(_cpath)
+	if _cpath ~= "/" and _cpath ~= "" then table.insert(_rlist, 1, "..") end
+	
+	local _scr = 0
+	local _abmsg = { ["-l"] = " Open ", ["-s"] = " Save As ", 
+			[1] = " Invalid ", [2] = " Overwrite " }
+	local _labmsg = ""
+	local _winh = _h - 7
+	local _cpos = 0
+	
+	clearAndRedraw()
+	--Some dedicated internal draw functions (to speed things up)
+	local function _drawWindow()
+		--Permanent parts of the window
+		term.setBackgroundColour(_btc)
+		term.setTextColour(_ttc)
+		term.setCursorPos(_x,_y)
+		term.write(string.rep(" ", math.floor(_w/2) - math.floor(#_mt[_flag]/2))
+				.._mt[_flag]..string.rep(" ", math.ceil(_w/2) - 
+				math.ceil(#_mt[_flag]/2)-1))
+		term.setBackgroundColour(colours.red)
+		term.setTextColour(colours.white)
+		term.write("x")
+		term.setBackgroundColour(_bc)
+		term.setTextColour(_tc)
+		for i=1,_h do
+			term.setCursorPos(_x,_y+i)
+			term.write(string.rep(" ", _w))
+		end
+		
+		term.setBackgroundColour(colours.grey)
+		term.setTextColour(colours.red)
+		term.setCursorPos(_x + _w - 10, _y + _h - 1)
+		term.write(" Cancel ")
+	end
+	
+	local function _drawBrowser()
+		term.setBackgroundColour(_bc)
+		term.setTextColour(_tc)
+		local _dpath = _cpath
+		if #_dpath > _w-4 then 
+			while _dpath:find("/") do
+				local _ind = _dpath:find("/") + 1
+				_dpath = _dpath:sub(_ind)
+				if #_dpath < _w-7 then
+					_dpath = "...".._dpath
+					break
+				end
+			end
+		end
+		if #_dpath > _w-4 then _dpath = "...".._dpath:sub(_w-4-#_dpath) end
+		term.setCursorPos(_x+2,_y+2)
+		term.write(_dpath..string.rep(" ", _w-4-#_dpath))
+		
+		term.setBackgroundColour(_bfc)
+		for i = 1 + _scr, _winh + _scr do
+			_pth = _rlist[i] or ""
+			term.setCursorPos(_x + 2, _y + 2 + i - _scr)
+			if fs.isDir(_cpath.."/".._pth) then
+				term.setTextColour(_tdc)
+			else term.setTextColour(_tfc) end
+			term.write(" ".._pth..string.rep(" ", _w - 5 - #_pth))
+		end
+	end
+	
+	local function _drawActivationButton()
+		_owrite = 0
+		local _val = _cpath.."/".._fname
+		if (not fs.exists(_val) and _flag == "-l") or 
+				(fs.exists(_val) and fs.isDir(_val)) then
+			_owrite = 1
+		elseif fs.exists(_val) and _flag == "-s" then _owrite = 2 end
+		term.setBackgroundColour(colours.grey)
+		term.setCursorPos(_x + 2, _y + _h - 1)
+		if _owrite == 1 and _flag ~= "-b" then
+			term.setTextColour(colours.lightGrey)
+			_labmsg = " Invalid "
+		elseif _owrite == 2 then
+			term.setTextColour(colours.orange)
+			_labmsg = " Overwrite "
+		elseif _flag == "-s" then
+			term.setTextColour(colours.green)
+			_labmsg = " Save "
+		elseif _flag == "-l" then
+			term.setTextColour(colours.green)
+			_labmsg = " Open "
+		end
+		term.write(_labmsg)
+		term.setBackgroundColour(_bc)
+		term.write(string.rep(" ", #" Overwrite " - #_labmsg))
+	end
+	
+	local function _drawWriteBar()
+		term.setCursorPos(_x + 2, _y + _h - 3)
+		term.setTextColour(colours.black)
+		term.setBackgroundColour(colours.lightGrey)
+		local _pm = "Save As "
+		if _flag == "-l" then _pm = "Open " end
+		term.write(_pm)
+		
+		local _msg = _fname
+		if #_msg > _w - 8 - #_pm then _msg = _msg:sub(#_msg - (_w - 8 - #_pm)) end
+		term.setBackgroundColour(colours.white)
+		term.write(" ".._msg)
+		_cpos = term.getCursorPos()
+		term.write(string.rep(" ", math.max(_w - 5 - #_pm - #_msg, 1)))
+	end
+	
+	_drawWindow()
+	_drawActivationButton()
+	_drawBrowser()
+	_drawWriteBar()
+	
+	while true do
+		term.setTextColour(colours.black)
+		term.setCursorPos(_cpos, _y + _h - 3)
+		term.setCursorBlink(true)
+		local _id,_p1,_p2,_p3 = os.pullEvent()
+		
+		if _id == "key" then
+			if _p1 == keys.backspace and #_fname > 0 then
+				_fname = _fname:sub(1,#_fname-1)
+				_drawActivationButton()
+				_drawWriteBar()
+			elseif _p1 == keys.up and _scr > 0 then
+				_scr = _scr - 1
+				_drawBrowser()
+			elseif _p1 == keys.down and _scr < #_rlist - _winh then
+				_scr = _scr + 1
+				_drawBrowser()
+			elseif _p1 == keys.enter then
+				local _val = _cpath.."/".._fname
+				if (_flag == "-l" and fs.exists(_val) and not fs.isDir(_val)) 
+						or(_flag == "-s" and not fs.isDir(_val)) then
+					break
+				end
+			elseif _p1 == keys.leftCtrl or _p == keys.rightCtrl then
+				_fname = nil
+				break
+			end
+		elseif _id == "char" then
+			_fname = _fname.._p1
+			_drawActivationButton()
+			_drawWriteBar()
+		elseif _id == "mouse_click" then
+			if _p2 == _x + _w - 1 and _p3 == _y then
+				_fname = nil
+				break
+			elseif _p2 >= _x + 2 and _p2 <= _x + _w - 2 and _p3 >= _y + 3 and
+					_p3 < _y + 3 + _winh then
+				_p3 = _p3 - _y - 2
+				local _val = _rlist[_p3 + _scr]
+				if _val == ".." then
+					--Wow why is there no reverse find
+					_cpath = getPreviousDir(_cpath)
+					_rlist = fs.list(_cpath)
+					if _cpath ~= "/" and _cpath ~= "" then table.insert(_rlist, 1, "..") end
+					_scr = 0
+					_drawBrowser()
+					_drawActivationButton()
+				elseif fs.isDir(_cpath.."/".._val) then
+					_cpath = _cpath.."/".._val
+					_rlist = fs.list(_cpath)
+					if _cpath ~= "/" and  _cpath ~= "" then table.insert(_rlist, 1, "..") end
+					_scr = 0
+					_drawBrowser()
+					_drawActivationButton()
+				else
+					_fname = _val or _fname
+					_drawActivationButton()
+					_drawWriteBar()
+				end
+			elseif _p3 == _y + _h - 1 and _p2 >= _x + 2 and _p2 < _x + 2 + #		_labmsg and _labmsg ~= _abmsg[1] then
+				break
+			elseif _p3 == _y + _h - 1 and _p2 >= _x + _w - 2 - #" Cancel " and
+					_p2 < _x + _w - 2 then
+				_fname = nil
+				return false
+			end
+		elseif _id == "mouse_scroll" then
+			_scr = math.min(_scr, #_rlist - _winh - 1)
+			_scr = math.max(_scr + _p1, 0)
+			_drawBrowser()
+		elseif _id == "timer" and _p1 == bTimer then saveDocument(bPath) end
+	end
+	if _fname then return (_cpath.."/".._fname):sub(2),_fname else return nil end
+end
+
+local function menuSaveAs()
+	local _sp,sn = displayFileBrowser("-s", 14, 24, 3) 
+	if _sp then 
+		sPath = _sp
+		sName = _sn
+		saveDocument()
+	end
+end
+
+local function checkSave()
+	if not sChange then return true end
+	clearAndRedraw()
+	local _val = displayConfirmDialogue("Unsaved Changes", "Your document contains unsaved changes. Are you sure you want to 	quit?", { [1] = "Save"; [2] = colours.green }, { [1] = "Discard"; [2] = colors.orange; }, { [1] = "Cancel";
+	[2] = colors.red; })
+	if _val == 1 then
+		if sPath then saveDocument()
+		else menuSaveAs() end
+		return true
+	elseif _val == 2 then
+		return true
+	else 
+		return false
+	end
+end
+
+--[[ Updates the list of currently available printers and other menu options
+	 Params: none
+	 Returns: none
+]]--
+local function updateMenu()
+	--Again, horrible. My coding sucks.
+	for i=1,6 do _printers[i] = nil end
+	for _,_s in pairs(rs.getSides()) do
+		if peripheral.isPresent(_s) and peripheral.getType(_s) == "printer" then
+			table.insert(_printers, { name = _s, enabled = true, value = _s })
+		end
+	end
+	_mChoices[3].enabled = sChange and sPath
+	_mChoices[4].enabled = sChange and sPath
+	_eChoices[1].enabled = #undolist > 0
+	_eChoices[2].enabled = #redolist > 0
+end
+
+--Performs a print with a given printer
+local function performPrint(_val)
+	_p = peripheral.wrap(_val)
+	clearAndRedraw()
+	local _ps,_pe,_cp = displayPrint(_p, math.ceil(w/2), 8)
+	if not _ps then 
+		lscroll = true
+		return
+	end
+	clearAndRedraw()
+	for c=1,_cp do
+		for i=_ps,_pe do
+			while _p.getPaperLevel() == 0 do
+				displayConfirmDialogue("Page "..i..": Check paper levels", "The paper tray is currently empty. Fill with paper and click here to continue.")
+			end
+			while _p.getInkLevel() == 0 do
+				displayConfirmDialogue("Page "..i..": Check ink levels", "The printer is out of ink. Insert more ink, and click here to continue.")
+			end
+			--There is no out-tray check... that I can tell at least.
+			while not _p:newPage() do
+				displayConfirmDialogue("Page "..i..": Check out tray", "The out tray may be full. Remove all pages and click here to continue.")
+			end
+			_p.setPageTitle((sName or "").." page "..i)
+			printPage(i, _p)
+			_p:endPage()
+		end
+		if c<_cp then displayConfirmDialogue("Copy "..c.." Complete!", "Clear out tray and click here to continue") end
+	end
+	
+	clearAndRedraw()
+	displayConfirmDialogue("Print Complete!", "Printed ".._cp.." copies (total "..#doc.." page(s).)")
+end
+
+--Performs the menu
+local function performMenu(_menu)
+	updateMenu()
+	local _val = displayDropDown(_menu.x, _menu.y, _menu)
+	
+	if peripheral.getType(_val) == "printer" then performPrint(_val) end
+	lscroll = true
+end
+
+--[[ A series of functions binded to keyboard shortcuts
+	 Parameters: none
+	 Returns: none
+]]--
+local bindings = {
+	--Moves us up. Hitting the top moves the cursor to the start of the line.
+	--Most editors do this. I don't know why. Convention?
+	[keys.up] = function()
+		if currline > 1 then currline = currline - 1
+		elseif currpage > 1 then
+			currpage = currpage - 1
+			currline = #doc[currpage]
+			lscroll = true
+		else
+			currind = 1
+			return
+		end
+		if currind > #doc[currpage][currline] then 
+			currind = math.max(1, #doc[currpage][currline] + 1)
+		end
+		fixCursorPos()
+		checkYScroll()
+	end,
+	--Moves us down. Hitting the bottom moves cursor to end of the line.
+	[keys.down] = function()
+		if currline < #doc[currpage] then currline = currline + 1
+		elseif currpage < #doc then
+			currpage = currpage + 1
+			currline = 1
+			lscroll = true
+		else
+			currind = #doc[currpage][currline] + 1
+			return
+		end
+		if currind > #doc[currpage][currline] then 
+			currind = math.max(1, #doc[currpage][currline] + 1)
+		end
+		fixCursorPos()
+		checkYScroll()
+	end,
+	--Moves us left. Hitting and edge moves to the end of the last line.
+	[keys.left] = function()
+		if currind <= 1 then
+			if currline > 1 then
+				currline = currline - 1
+				currind = #doc[currpage][currline] + 1
+			elseif currpage > 1 then
+				currpage = currpage - 1
+				currline = #doc[currpage]
+				currind = #doc[currpage][currline] + 1
+			end
+		else
+			currind = currind - 1
+		end
+		fixCursorPos()
+		checkYScroll()
+	end,
+	--Moves us right. Hitting the edge moves to the start of the next line.
+	[keys.right] = function()
+		local _c = doc[currpage][currline]:sub(currind)
+		if currind >= #doc[currpage][currline] + 1 or _c == "\n" or _c == "\f" then
+			if currline < #doc[currpage] then
+				currline = currline + 1
+				currind = 1
+			elseif currpage < #doc then
+				currpage = currpage + 1
+				currline = 1
+				currind = 1
+			end
+		else
+			currind = currind + 1
+		end
+		fixCursorPos()
+		checkYScroll()
+	end,
+	--[[ Adds a newline character to the end of the line, and pushes everything down ]]
+	[keys.enter] = function()
+		addUndoableAction(currind, ACTIONS.ADDBREAK, "\n")
+		insertLineBreak("\n")
+	end,
+	--Some more simple cursor manipulation keys
+	[keys.home] = function() currind = 1 end,
+	[keys["end"]] = function() 
+		currind = #doc[currpage][currline] + 1
+		fixCursorPos()
+	end,
+	[keys.pageDown] = function()
+		if currpage < #doc then 
+			currpage = currpage + 1 
+			currline = 1 currind = 1
+			checkYScroll()
+		end
+		lscroll = true
+	end,
+	[keys.pageUp] = function()
+		if currpage > 1 then 
+			currpage = currpage - 1
+			currline = 1 currind = 1
+			checkYScroll()
+		end
+		lscroll = true
+	end,
+	-- Some other core functions in the program
+	[keys.backspace] = function ()
+		local _val = deleteCharacter()
+		addUndoableAction(currind, ACTIONS.DELETECHAR, _val)
+	end;
+	[keys.leftCtrl] = function() performMenu(_mChoices) end,
+	[keys.grave] = function() testMode = not testMode end,
+	[keys.tab] = function()
+		local _len = #doc[currpage][currline]
+		local _add = math.min(4 - (_len % 4), linelen - currind + 1)
+		for i=1,_add do addCharacter(" ") end
+	end
+}
+
+
+--[[ Performs actions based on keyboard and mouse input
+	 Parameters: none
+	 Returns: none
+]]--
+local function handleInput()
+	local _,_cpy = term.getCursorPos()
+	if _cpy > 1 then term.setCursorBlink(true) end
+	local _id,_p1,_p2,_p3 = os.pullEvent()
+	term.setCursorBlink(false)
+	local _oUndoLen,_oRedoLen = #undolist,#redolist
+	if _id == "char" then
+		addCharacter(_p1)
+		addUndoableAction(currind - 1, ACTIONS.ADDCHAR, _p1)
+	elseif _id == "key" then
+		if bindings[_p1] then bindings[_p1]()
+		elseif _p1 == keys.leftCtrl then finished = true end
+	elseif _id == "mouse_scroll" then
+		yscroll = yscroll - _p1
+		if yscroll > 4 - _yoff then
+			if currpage > 1 then
+				yscroll = h - pagelen - _yoff - 3
+				currpage = currpage - 1
+				currline = 1
+				currind = 1
+			else yscroll = 4 - _yoff end
+		elseif yscroll < h - pagelen - _yoff - 3 then
+			if currpage < #doc then
+				yscroll = 4 - _yoff
+				currpage = currpage + 1
+				currline = 1
+				currind = 1
+			else yscroll = h - pagelen - _yoff - 3 end
+		end
+		lscroll = true
+	elseif _id == "mouse_click" then
+		if _p2 >= _mChoices.x and _p2 <= _mChoices.x + #_mChoices.name 
+				and _p3 == _mChoices.y then
+			performMenu(_mChoices)
+		elseif _p2 >= _eChoices.x and _p2 <= _eChoices.x + #_eChoices.name
+				and _p3 == _eChoices.y then
+			performMenu(_eChoices)
+		else
+			currline = math.max(_p3 - _yoff - yscroll, 1)
+			currline = math.min(currline, #doc[currpage])
+			local _ws = getWhitespaceLength(currpage, currline)
+			currind = math.max(_p2 - _xoff - _ws, 1)
+			currind = math.min(currind, #doc[currpage][currline] + 1)
+			if currind > #doc[currpage][currline] and hasBreakEnd(doc[currpage][currline])
+				then currind = currind - 1 end
+			checkYScroll()
+		end
+	elseif _id == "timer" then
+		if _p1 == bTimer then
+			saveDocument(bPath)
+		elseif _p1 == actionTimer then
+			actionTimer = nil
+		end
+	end
+	--Clearing the redo list
+	if _oUndoLen < #undolist and _oRedoLen == #redolist then redolist = {}  end
+	testWait()
+end
+
+--Menu initialization
+table.insert(_aChoices, { name = "Left", key = "L", enabled = true, value = function()
+		testAlign = ALIGNLEFT end})
+table.insert(_aChoices, { name = "Center", key = "C", enabled = true, value = function()
+		testAlign = ALIGNCENTER end})
+table.insert(_aChoices, { name = "Right", key = "R", enabled = true, value = function()
+		testAlign = ALIGNRIGHT end})
+table.insert(_iChoices, { name = "Page Break", key = "P", enabled = true, value = function()
+		addUndoableAction(currind, ACTIONS.ADDBREAK, "\f")
+		insertLineBreak("\f")
+	end })
+table.insert(_iChoices, { name = "Section Break", key = "S", enabled = false, 
+	value = function() testPrint("unimplemented") end })
+table.insert(_mChoices, { name = "New File", key = "N", enabled = true, value = function() 
+	if checkSave() then constructNewDocument() end end }) 
+table.insert(_mChoices, { name = "Open", key = "O", enabled = true, value = function() 
+	if checkSave() then
+		local _sp,_sn = displayFileBrowser("-l", 14, 24, 3) 
+		if _sp then
+			loadDocument(_sp)
+			sPath = _sp
+			sName = _sn
+	end end end })
+table.insert(_mChoices, { name = "Revert", key = "R", enabled = false, value = function()
+	loadDocument(sPath)
+end })
+table.insert(_mChoices, { name = "Save", key = "S", enabled = false, value = saveDocument })
+table.insert(_mChoices, { name = "Save As", key = "A", enabled = true, value = menuSaveAs })
+table.insert(_mChoices, { name = "Print", key = "P", enabled = false, value = _printers }) 
+table.insert(_mChoices, { name = "--------", enabled = false, value = nil })
+table.insert(_mChoices, { name = "About", key = "b", enabled = true, value = displayAbout })
+table.insert(_mChoices, { name = "Quit", key = "Q", enabled = true, value = function() 
+	if checkSave() then finished = true end end })
+table.insert(_eChoices, { name = "Undo", key = "z", enabled = false, value = function()
+	undoAction(undolist, redolist) end })
+table.insert(_eChoices, { name = "Redo", key = "y", enabled = false, value = function() 
+	undoAction(redolist, undolist) end })
+--table.insert(_eChoices, { name = "Cut", key = "x", enabled = false, value = function() 
+--	testPrint("unimplemented") end })
+--table.insert(_eChoices, { name = "Copy", key = "c", enabled = false, value = function() 
+--	testPrint("unimplemented") end })
+--table.insert(_eChoices, { name = "Paste", key = "v", enabled = false, value = function() 
+--	testPrint("unimplemented") end })
+table.insert(_eChoices, { name = "-------", enabled = false, value = nil })
+table.insert(_eChoices, { name = "Insert", key = "I", enabled = true, value = _iChoices })
+table.insert(_eChoices, { name = "Align", key = "A", enabled = true, value = _aChoices })
+
+if not term.isColour() then
+	print("Currently, WYSIwrite is only supported on advanced computers")
+end
+
+local _resp = 0
+--If there is a backup, we ask if this is to be restored
+if (fs.exists(bPath)) then
+	term.setBackgroundColour(colours.lightBlue)
+	shell.run("clear")
+	_resp = displayConfirmDialogue("Restore last document?", [[WYSIwrite unexpectedly closed last session. Would you like to restore your last document?]], 
+	{"Restore", colours.green}, {"Discard", colours.red})
+	if _resp == 1 then 
+		loadDocument(bPath)
+	end
+	fs.delete(bPath) 
+end
+
+local _tArgs = {...}
+if _tArgs[1] and _resp ~= 1 then
+	sName = _tArgs[1]:gsub("\\","/")
+	sPath = shell.resolve(sName)
+	local _pcts = split(sName, "/")
+	sName = _pcts[#_pcts]
+	if sName == ".writebackup" then
+		print("Unsafe to construct/overwrite backup with this application. If file exists, it can be restored by running write without a path.")
+		return
+	end
+	if fs.exists(sPath) then loadDocument(sPath)
+	else constructNewDocument(sName, sPath) end
+elseif _resp ~= 1 then constructNewDocument() end
+
+checkYScroll()
+while not finished do
+	--Basic printing stuff
+	if lscroll then
+		displayClearPage()
+		lscroll = false
+	end
+	term.setBackgroundColour(colours.white)
+	term.setTextColour(colours.black)
+	printPage(currpage, term, _xoff + 1, _yoff + yscroll)
+	displayInterface()
+	--Repositioning the cursor
+	term.setTextColour(colours.black)
+	term.setCursorPos(currind + _xoff + getWhitespaceLength(currpage,currline), 
+			currline + _yoff + yscroll)
+	
+	handleInput()
+end
+--remove backup (this was a safe quit)
+fs.delete(bPath)
+term.setBackgroundColour(colours.black)
+shell.run("clear")
