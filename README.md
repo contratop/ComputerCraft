@@ -14,6 +14,7 @@ Aplicaciones portables y utiles sin dependencias de otros programas
 - **Clock_ChatConnect:** Muestra la hora en tiempo real
 
 - **Cloud_Catcher:** Como el Anydesk pero en ComputerCraft, permite usar un equipo desde una pagina web
+https://cloud-catcher.squiddev.cc/
 
 - **Enchat:** Programa de chat como el Messenger
 
@@ -32,3 +33,10 @@ Aplicaciones portables y utiles sin dependencias de otros programas
 - **Todo:** Aplicacion de lista de tareas
 
 - **VideoPlayer:** Reproductor de video
+
+- **Word:** Editor de documentos muy basico y sencillo
+
+### OS
+Instaladores de sistemas operativos
+
+- **Opus-OS:** Sistema operativo multiproceso
